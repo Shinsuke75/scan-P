@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>scan-P｜ドキュメントスキャナ（台形補正）</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1 class="app-title">scan-P</h1>
+    <p class="app-subtitle">ブラウザだけで完結する台形補正ドキュメントスキャナ</p>
+  </header>
+
+  <main class="container">
+    <!-- 操作パネル -->
+    <section class="toolbar card">
+      <label class="btn btn-primary file-btn">
+        <input type="file" id="fileInput" accept="image/*" hidden />
+        <span>📷 画像を選択</span>
+      </label>
+
+      <button id="warpBtn" class="btn btn-accent" disabled>✂️ 補正実行</button>
+
+      <div class="filter-group" id="filterGroup" hidden>
+        <span class="filter-label">仕上げ:</span>
+        <div class="segmented">
+          <button class="seg-btn is-active" data-filter="color">カラー</button>
+          <button class="seg-btn" data-filter="gray">グレー</button>
+          <button class="seg-btn" data-filter="bw">白黒</button>
+        </div>
+      </div>
+
+      <div class="download-group" id="downloadGroup" hidden>
+        <button id="downloadPngBtn" class="btn btn-ghost">⬇️ PNG</button>
+        <button id="downloadJpgBtn" class="btn btn-ghost">⬇️ JPEG</button>
+      </div>
+    </section>
+
+    <!-- ステータス -->
+    <div id="status" class="status" hidden></div>
+
+    <!-- 作業エリア -->
+    <section class="workspace">
+      <div class="panel card">
+        <h2 class="panel-title">元画像 ＋ 頂点調整</h2>
+        <div class="canvas-wrap" id="srcWrap">
+          <canvas id="srcCanvas"></canvas>
+          <canvas id="overlayCanvas" class="overlay"></canvas>
+          <canvas id="loupe" class="loupe" hidden></canvas>
+          <p class="placeholder" id="srcPlaceholder">画像を選択してください</p>
+        </div>
+        <p class="hint">4 つの点を書類の角に合わせてドラッグしてください</p>
+      </div>
+
+      <div class="panel card">
+        <h2 class="panel-title">補正結果</h2>
+        <div class="canvas-wrap result-wrap" id="dstWrap">
+          <canvas id="dstCanvas"></canvas>
+          <p class="placeholder" id="dstPlaceholder">「補正実行」を押すと結果が表示されます</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>OpenCV.js + HTML5 Canvas / フロントエンドのみで動作</p>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
