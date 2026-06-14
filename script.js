@@ -28,6 +28,7 @@ const downloadJpgBtn = document.getElementById('downloadJpgBtn');
 
 const srcCtx = srcCanvas.getContext('2d');
 const overlayCtx = overlayCanvas.getContext('2d');
+const dstCtx = dstCanvas.getContext('2d');
 
 // ---- アプリ状態 ----
 const state = {
@@ -117,6 +118,14 @@ async function loadImageFile(file) {
   state.nativeH = bitmap.height;
   state.loadToken++;
   state.userAdjusted = false;
+
+  // 前回の結果を解放し、結果パネルをリセット
+  if (state.warpedColor) { state.warpedColor.delete(); state.warpedColor = null; }
+  dstCtx.clearRect(0, 0, dstCanvas.width, dstCanvas.height);
+  dstCanvas.width = 0; dstCanvas.height = 0;
+  dstPlaceholder.hidden = false;
+  filterGroup.hidden = true;
+  downloadGroup.hidden = true;
 
   renderSource();
 
