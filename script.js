@@ -523,11 +523,36 @@ async function runWarp() {
   }
 }
 
-// 結果 Mat にフィルタを適用して結果キャンバスへ表示（Stage 6 でフィルタ拡張）
+// 結果 Mat に仕上げフィルタを適用して結果キャンバスへ表示
 function renderResult() {
   const cv = window.cv;
   if (!cv || !state.warpedColor) return;
-  cv.imshow(dstCanvas, state.warpedColor);
+  const base = state.warpedColor;
+
+  if (state.filter === 'color') {
+    cv.imshow(dstCanvas, base);
+    return;
+  }
+
+  let gray = new cv.Mat();
+  let bw = null;
+  try {
+    cv.cvtColor(base, gray, cv.COLOR_RGBA2GRAY);
+    if (state.filter === 'gray') {
+      cv.imshow(dstCanvas, gray);
+      return;
+    }
+    // 白黒 2 値化（紙のスキャン風）: 適応的しきい値
+    bw = new cv.Mat();
+    cv.adaptiveThreshold(
+      gray, bw, 255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 15, 10
+    );
+    cv.imshow(dstCanvas, bw);
+  } finally {
+    gray.delete();
+    if (bw) bw.delete();
+  }
 }
 
 warpBtn.addEventListener('click', () => { runWarp(); });
@@ -673,4 +698,32 @@ function animatePoints(target) {
   requestAnimationFrame(step);
 }
 
-console.log('[scan-P] ready (stage 5: auto contour detection)');
+/* ============================================================
+ * 仕上げフィルタ切り替え（5）＋ダウンロード
+ * ============================================================ */
+filterGroup.querySelectorAll('.seg-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (!state.warpedColor) return;
+    filterGroup.querySelectorAll('.seg-btn').forEach((b) => b.classList.remove('is-active'));
+    btn.classList.add('is-active');
+    state.filter = btn.dataset.filter;
+    renderResult();
+  });
+});
+
+function downloadResult(mime, ext, quality) {
+  if (!state.warpedColor) return;
+  const url = dstCanvas.toDataURL(mime, quality);
+  const a = document.createElement('a');
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  a.href = url;
+  a.download = `scan-p_${ts}.${ext}`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+downloadPngBtn.addEventListener('click', () => downloadResult('image/png', 'png'));
+downloadJpgBtn.addEventListener('click', () => downloadResult('image/jpeg', 'jpg', 0.92));
+
+console.log('[scan-P] ready (stage 6: filters + download)');
