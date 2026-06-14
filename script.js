@@ -32,7 +32,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = '2026-06-14 v10';
+const BUILD = '2026-06-14 v11';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -50,8 +50,6 @@ const state = {
   loadToken: 0,      // 画像入れ替え検出用トークン（古い自動検出の適用を防ぐ）
   userAdjusted: false, // ユーザーが頂点を手動調整したか（自動検出の上書き抑止）
   filter: 'color',   // 仕上げフィルタ
-  autoDetectTimer: null, // 自動検出の遅延実行タイマー
-  autoDetectIdle: null,  // requestIdleCallback の ID
 };
 
 // ---- ステータス表示ユーティリティ ----
@@ -119,7 +117,6 @@ function makeFallbackPoints(viewW, viewH) {
  * 画像の読み込みと表示（C: EXIF 向き補正）
  * ============================================================ */
 async function loadImageFile(file) {
-  cancelAutoDetect();
   setStatus('work', '画像を読み込み中…', true);
 
   let bitmap;
@@ -260,7 +257,6 @@ overlayCanvas.addEventListener('pointerdown', (ev) => {
   const pos = toCanvasPos(ev);
   const idx = hitTest(pos);
   if (idx === -1) return;
-  cancelAutoDetect();
   activeIdx = idx;
   state.userAdjusted = true; // 以後、自動検出結果で上書きしない
   overlayCanvas.setPointerCapture(ev.pointerId); // 外へ出ても追従
@@ -386,96 +382,6 @@ window.addEventListener('resize', () => {
     drawOverlay();
   }, 150);
 });
-
-/* ============================================================
- * OpenCV.js 遅延ロード（B）
- *  - 複数 CDN へフォールバック。1 つが遅ければ短いタイムアウトで
- *    次の CDN を追加投入し、最初に初期化できたものを採用する。
- *    （docs.opencv.org は CDN ではなく低速・不達になりやすいため）
- *  - 配布形態の違い（クラシック / Promise / MODULARIZE 関数）に対応。
- *  - 「cv.Mat が使えるか」のポーリングを最終的な初期化判定にする。
- * ============================================================ */
-const OPENCV_URLS = [
-  'https://docs.opencv.org/4.x/opencv.js',
-  'https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.js',
-  'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.11.0-release.1/dist/opencv.js',
-];
-const PER_ATTEMPT_MS = 12000;   // この時間で初期化しなければ次の CDN へ
-const OVERALL_MS = 45000;       // 全体の最終タイムアウト
-let cvLoadPromise = null;
-
-function ensureOpenCV() {
-  if (cvLoadPromise) return cvLoadPromise;
-  cvLoadPromise = new Promise((resolve, reject) => {
-    const READY = () => window.cv && typeof window.cv.Mat === 'function';
-
-    let settled = false;
-    let poller = null, overall = null, attemptTimer = null, idx = 0;
-
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      clearInterval(poller); clearTimeout(overall); clearTimeout(attemptTimer);
-      resolve(window.cv);
-    };
-    const failAll = (msg) => {
-      if (settled) return;
-      settled = true;
-      clearInterval(poller); clearTimeout(overall); clearTimeout(attemptTimer);
-      cvLoadPromise = null; // 失敗はキャッシュせず再試行可能に
-      reject(new Error(msg));
-    };
-
-    if (READY()) { resolve(window.cv); return; }
-
-    // 初期化検知（全形態・全 CDN 共通の安全網）
-    poller = setInterval(() => { if (READY()) finish(); }, 120);
-    overall = setTimeout(() => {
-      if (!READY()) failAll('OpenCV.js を読み込めませんでした（全 CDN タイムアウト）');
-    }, OVERALL_MS);
-
-    // 解決値モジュールを window.cv に反映し、初期化完了を待つ
-    const adopt = (mod) => {
-      if (mod && typeof mod === 'object') {
-        window.cv = mod;
-        if (typeof mod.Mat === 'function') { finish(); return; }
-        try { mod.onRuntimeInitialized = () => finish(); } catch (_) {}
-      }
-    };
-
-    const handleLoad = () => {
-      try {
-        const c = window.cv;
-        if (typeof c === 'function') {
-          Promise.resolve(c()).then(adopt).catch(() => {}); // MODULARIZE 関数
-        } else if (c && typeof c.then === 'function') {
-          c.then(adopt).catch(() => {});                    // Promise 形式
-        } else if (c && typeof c === 'object') {
-          try { c.onRuntimeInitialized = () => finish(); } catch (_) {} // クラシック
-        }
-      } catch (_) { /* ポーリングに委ねる */ }
-    };
-
-    const tryNext = () => {
-      if (settled || READY()) return;
-      if (idx >= OPENCV_URLS.length) return; // 残りは overall タイムアウトが処理
-      const url = OPENCV_URLS[idx++];
-      const s = document.createElement('script');
-      s.src = url;
-      s.async = true;
-      s.dataset.opencv = '1';
-      s.onload = handleLoad;
-      s.onerror = () => { clearTimeout(attemptTimer); tryNext(); }; // 即・次へ
-      document.head.appendChild(s);
-
-      clearTimeout(attemptTimer);
-      attemptTimer = setTimeout(() => { if (!READY()) tryNext(); }, PER_ATTEMPT_MS);
-    };
-
-    tryNext();
-  });
-  return cvLoadPromise;
-}
 
 /* ============================================================
  * 補正実行（4: 座標変換・並べ替え・出力サイズ算出・clamp・warp）
@@ -910,45 +816,13 @@ if (autoBtn) {
 
 // 控えめな「自動検出中…」インジケータ
 let autoBadge = null;
-const AUTO_DETECT_DELAY_MS = 650;
-
-function cancelAutoDetect() {
-  if (state.autoDetectTimer !== null) {
-    clearTimeout(state.autoDetectTimer);
-    state.autoDetectTimer = null;
-  }
-  if (state.autoDetectIdle !== null && typeof window.cancelIdleCallback === 'function') {
-    window.cancelIdleCallback(state.autoDetectIdle);
-    state.autoDetectIdle = null;
-  }
-}
-
-function scheduleAutoDetect(token) {
-  cancelAutoDetect();
-  state.autoDetectTimer = setTimeout(() => {
-    state.autoDetectTimer = null;
-    if (token !== state.loadToken || state.userAdjusted || activeIdx !== -1) return;
-    const run = () => {
-      if (token !== state.loadToken || state.userAdjusted || activeIdx !== -1) return;
-      startAutoDetect(token);
-    };
-    if (typeof window.requestIdleCallback === 'function') {
-      state.autoDetectIdle = window.requestIdleCallback(() => {
-        state.autoDetectIdle = null;
-        run();
-      }, { timeout: 900 });
-      return;
-    }
-    run();
-  }, AUTO_DETECT_DELAY_MS);
-}
 
 function showAutoIndicator(on) {
   if (on) {
     if (!autoBadge) {
       autoBadge = document.createElement('div');
       autoBadge.className = 'auto-badge';
-      autoBadge.innerHTML = '<span class="spinner"></span><span>自動検出中…（任意）</span>';
+      autoBadge.innerHTML = '<span class="spinner"></span><span>自動検出中…</span>';
       srcWrap.appendChild(autoBadge);
     }
     autoBadge.hidden = false;
@@ -957,129 +831,109 @@ function showAutoIndicator(on) {
   }
 }
 
-// エラー＋「再試行」ボタンをステータスに表示
-function showRetryStatus(message) {
-  statusEl.hidden = false;
-  statusEl.className = 'status error';
-  statusEl.innerHTML =
-    '<span>' + message + '</span>' +
-    '<button id="retryDetectBtn" class="btn btn-ghost" ' +
-    'style="margin-left:auto;padding:6px 12px;min-height:34px;">再試行</button>';
-  const btn = document.getElementById('retryDetectBtn');
-  if (btn) {
-    btn.addEventListener('click', () => {
-      if (!state.bitmap) return;
-      startAutoDetect(state.loadToken);
-    });
-  }
-}
-
-async function startAutoDetect(token) {
-  if (token !== state.loadToken || state.userAdjusted || activeIdx !== -1) return;
+// 自動検出（純 JS・OpenCV 不要）。固まらない軽量実装。
+function startAutoDetect(token) {
+  if (token !== state.loadToken) return;
   showAutoIndicator(true);
-
-  let cv;
-  try {
-    cv = await ensureOpenCV();
-  } catch (e) {
-    console.warn('[scan-P] OpenCV load failed during auto-detect', e);
+  setStatus('work', '枠を自動検出中…', true);
+  // 1〜2 フレーム譲ってインジケータを描画してから計算
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    let nativePts = null;
+    try { nativePts = detectDocumentJS(); }
+    catch (e) { console.warn('[scan-P] detectDocumentJS error', e); }
     showAutoIndicator(false);
-    // 自動検出は任意機能。失敗しても核心機能は動くので穏やかに案内のみ。
-    setStatus('info', '手動で 4 点を角に合わせて「補正実行」を押してください');
-    return;
-  }
-  // 画像が入れ替わった／手動操作開始なら中断
-  if (token !== state.loadToken || state.userAdjusted || activeIdx !== -1) {
-    showAutoIndicator(false);
-    if (token === state.loadToken && state.userAdjusted) {
-      setStatus('info', '手動で 4 点を調整中です');
+    if (token !== state.loadToken) return;
+    if (!nativePts) {
+      setStatus('info', '枠を自動検出できませんでした — 手動で 4 点を合わせてください');
+      return;
     }
-    return;
-  }
-  // 重い処理の前に 1 フレーム譲ってインジケータを描画
-  await new Promise((r) => requestAnimationFrame(() => r()));
-
-  let nativePts = null;
-  try {
-    nativePts = detectDocument(cv);
-  } catch (e) {
-    console.warn('[scan-P] detectDocument error', e);
-  }
-  showAutoIndicator(false);
-
-  if (token !== state.loadToken) return;     // 古い結果は破棄
-  if (state.userAdjusted || activeIdx !== -1) return; // 手動調整を尊重
-  if (!nativePts) {
-    setStatus('info', '自動検出できませんでした — 手動で 4 点を合わせてください');
-    return;
-  }
-
-  const ordered = orderCorners(nativePts);
-  const viewPts = ordered.map((p) => ({ x: p.x * state.scale, y: p.y * state.scale }));
-  animatePoints(viewPts);
-  setStatus('done', '書類の輪郭を自動検出しました — 必要なら微調整してください');
+    const ordered = orderCorners(nativePts);
+    const viewPts = ordered.map((p) => ({ x: p.x * state.scale, y: p.y * state.scale }));
+    state.userAdjusted = false;
+    animatePoints(viewPts);
+    setStatus('done', '枠を自動検出しました — 必要なら微調整してください');
+  }));
 }
 
-// 縮小コピー上で四角形輪郭を検出し、元画像座標の 4 点を返す（なければ null）
-function detectDocument(cv) {
-  const target = 640; // 検出用の長辺目安（軽量化）
+// 大津の二値化で最も明るい連結領域（紙）を求め、その四隅を返す（純 JS）
+function detectDocumentJS() {
+  const target = 480; // 検出用の縮小（軽量）
   const longSide = Math.max(state.nativeW, state.nativeH);
-  const dscale = Math.min(1, target / longSide);
-  const dw = Math.max(1, Math.round(state.nativeW * dscale));
-  const dh = Math.max(1, Math.round(state.nativeH * dscale));
+  const s = Math.min(1, target / longSide);
+  const dw = Math.max(1, Math.round(state.nativeW * s));
+  const dh = Math.max(1, Math.round(state.nativeH * s));
 
-  const tmp = document.createElement('canvas');
-  tmp.width = dw; tmp.height = dh;
-  tmp.getContext('2d').drawImage(state.bitmap, 0, 0, dw, dh);
+  const c = document.createElement('canvas');
+  c.width = dw; c.height = dh;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(state.bitmap, 0, 0, dw, dh);
+  const data = ctx.getImageData(0, 0, dw, dh).data;
+  const n = dw * dh;
 
-  let src = cv.imread(tmp);
-  let gray = new cv.Mat();
-  let blur = new cv.Mat();
-  let edges = new cv.Mat();
-  let contours = new cv.MatVector();
-  let hierarchy = new cv.Mat();
-  let best = null;
-
-  try {
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-    cv.Canny(blur, edges, 75, 200);
-    // 縁の途切れを閉じる
-    const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-    cv.dilate(edges, edges, k);
-    k.delete();
-
-    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-    let maxArea = dw * dh * 0.18; // 画像の 18% 以上の四角形のみ採用
-    for (let i = 0; i < contours.size(); i++) {
-      const cnt = contours.get(i);
-      const peri = cv.arcLength(cnt, true);
-      const approx = new cv.Mat();
-      cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
-      if (approx.rows === 4 && cv.isContourConvex(approx)) {
-        const area = Math.abs(cv.contourArea(approx));
-        if (area > maxArea) {
-          maxArea = area;
-          const pts = [];
-          for (let j = 0; j < 4; j++) {
-            pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
-          }
-          best = pts;
-        }
-      }
-      approx.delete();
-      cnt.delete();
-    }
-  } finally {
-    src.delete(); gray.delete(); blur.delete(); edges.delete();
-    contours.delete(); hierarchy.delete();
+  // グレースケール＋ヒストグラム
+  const gray = new Uint8Array(n);
+  const hist = new Int32Array(256);
+  for (let i = 0; i < n; i++) {
+    const j = i * 4;
+    const g = (0.299 * data[j] + 0.587 * data[j + 1] + 0.114 * data[j + 2]) | 0;
+    gray[i] = g; hist[g]++;
   }
 
-  if (!best) return null;
-  // 縮小コピー座標 → 元画像座標へ
-  const inv = 1 / dscale;
-  return best.map((p) => ({ x: p.x * inv, y: p.y * inv }));
+  // 大津の閾値
+  let sum = 0;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0, wB = 0, maxVar = -1, thr = 127;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t]; if (wB === 0) continue;
+    const wF = n - wB; if (wF === 0) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sum - sumB) / wF;
+    const v = wB * wF * (mB - mF) * (mB - mF);
+    if (v > maxVar) { maxVar = v; thr = t; }
+  }
+
+  // 明るい画素（紙候補）の最大連結成分を BFS で抽出
+  const bright = new Uint8Array(n);
+  for (let i = 0; i < n; i++) bright[i] = gray[i] > thr ? 1 : 0;
+  const label = new Int32Array(n).fill(-1);
+  const queue = new Int32Array(n);
+  let bestLabel = -1, bestSize = 0, cur = 0;
+  for (let start = 0; start < n; start++) {
+    if (!bright[start] || label[start] !== -1) continue;
+    let head = 0, tail = 0, size = 0;
+    queue[tail++] = start; label[start] = cur;
+    while (head < tail) {
+      const p = queue[head++]; size++;
+      const x = p % dw, y = (p / dw) | 0;
+      if (x > 0) { const q = p - 1; if (bright[q] && label[q] === -1) { label[q] = cur; queue[tail++] = q; } }
+      if (x < dw - 1) { const q = p + 1; if (bright[q] && label[q] === -1) { label[q] = cur; queue[tail++] = q; } }
+      if (y > 0) { const q = p - dw; if (bright[q] && label[q] === -1) { label[q] = cur; queue[tail++] = q; } }
+      if (y < dh - 1) { const q = p + dw; if (bright[q] && label[q] === -1) { label[q] = cur; queue[tail++] = q; } }
+    }
+    if (size > bestSize) { bestSize = size; bestLabel = cur; }
+    cur++;
+  }
+
+  // 紙が小さすぎる／見つからない場合は失敗
+  if (bestLabel === -1 || bestSize < n * 0.05) return null;
+
+  // 最大成分の四隅（凸四角形の極値）を求める
+  let tl = null, tr = null, br = null, bl = null;
+  let minSum = Infinity, maxSum = -Infinity, minDiff = Infinity, maxDiff = -Infinity;
+  for (let i = 0; i < n; i++) {
+    if (label[i] !== bestLabel) continue;
+    const x = i % dw, y = (i / dw) | 0;
+    const su = x + y, di = x - y;
+    if (su < minSum) { minSum = su; tl = { x, y }; }
+    if (su > maxSum) { maxSum = su; br = { x, y }; }
+    if (di > maxDiff) { maxDiff = di; tr = { x, y }; }
+    if (di < minDiff) { minDiff = di; bl = { x, y }; }
+  }
+  if (!tl || !tr || !br || !bl) return null;
+
+  // 縮小座標 → 元画像座標
+  const inv = 1 / s;
+  return [tl, tr, br, bl].map((p) => ({ x: p.x * inv, y: p.y * inv }));
 }
 
 // 現在の頂点から目標位置へ滑らかに移動
