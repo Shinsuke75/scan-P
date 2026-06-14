@@ -13,6 +13,7 @@
 // ---- DOM 参照 ----
 const fileInput = document.getElementById('fileInput');
 const warpBtn = document.getElementById('warpBtn');
+const autoBtn = document.getElementById('autoBtn');
 const srcCanvas = document.getElementById('srcCanvas');
 const overlayCanvas = document.getElementById('overlayCanvas');
 const dstCanvas = document.getElementById('dstCanvas');
@@ -31,7 +32,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = '2026-06-14 v9';
+const BUILD = '2026-06-14 v10';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -158,11 +159,12 @@ async function loadImageFile(file) {
   drawOverlay();
 
   warpBtn.disabled = false;
+  if (autoBtn) autoBtn.hidden = false;
   setStatus('info',
-    `読み込み完了（${state.nativeW}×${state.nativeH}px）— すぐに 4 点を調整できます`);
+    `読み込み完了（${state.nativeW}×${state.nativeH}px）— 4 点を角に合わせて「補正実行」`);
 
-  // 読み込み直後の手動調整を優先し、短い遅延後に自動検出を開始
-  scheduleAutoDetect(state.loadToken);
+  // 重要: OpenCV(約10MB) を自動で読み込むとモバイルが固まるため、
+  // 自動検出は「✨自動で枠検出」ボタンを押したときだけ実行する。
 }
 
 // 元画像を「ビュー」サイズに縮小して表示キャンバスへ描画
@@ -889,6 +891,15 @@ function renderResult() {
 }
 
 warpBtn.addEventListener('click', () => { runWarp(); });
+
+// 自動検出は明示的なタップ時のみ（OpenCV を読むのはこの時だけ）
+if (autoBtn) {
+  autoBtn.addEventListener('click', () => {
+    if (!state.bitmap) return;
+    state.userAdjusted = false; // 自動結果で頂点を更新可能に
+    startAutoDetect(state.loadToken);
+  });
+}
 
 /* ============================================================
  * 自動輪郭検出（2 / 5）
