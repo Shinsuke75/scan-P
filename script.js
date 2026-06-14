@@ -37,7 +37,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = '2026-06-14 v17';
+const BUILD = '2026-06-14 v18';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -389,6 +389,19 @@ const LOUPE_SIZE = 130;          // CSS 上のサイズ（style.css と一致）
 const LOUPE_ZOOM = 2.6;          // 拡大率（ビュー基準）
 const loupeCtx = loupe.getContext('2d');
 
+// 「画像の外（余白）」を表す市松パターン（キャンバスの余白と同じ見た目）
+let checkerPattern = null;
+function getCheckerPattern() {
+  if (checkerPattern) return checkerPattern;
+  const c = document.createElement('canvas');
+  c.width = c.height = 20;
+  const x = c.getContext('2d');
+  x.fillStyle = '#eef2f7'; x.fillRect(0, 0, 20, 20);
+  x.fillStyle = '#dde3ec'; x.fillRect(0, 0, 10, 10); x.fillRect(10, 10, 10, 10);
+  checkerPattern = loupeCtx.createPattern(c, 'repeat');
+  return checkerPattern;
+}
+
 function showLoupe(ptView) {
   if (!state.bitmap) return;
   const dpr = window.devicePixelRatio || 1;
@@ -402,11 +415,12 @@ function showLoupe(ptView) {
   // ビュー上で切り出す窓（px）→ 元画像座標へ
   const winView = LOUPE_SIZE / LOUPE_ZOOM;
   const winNative = winView / state.scale;
-  // 表示座標（余白込み）→ 元画像座標
+  // 表示座標（余白込み）→ 元画像座標（窓は点を中心に固定＝点の本当の位置）
   const cxNative = (ptView.x - state.padX) / state.scale;
   const cyNative = (ptView.y - state.padY) / state.scale;
-  let sxN = cxNative - winNative / 2;
-  let syN = cyNative - winNative / 2;
+  const sxN = cxNative - winNative / 2;
+  const syN = cyNative - winNative / 2;
+  const sc = px / winNative;     // ルーペpx / 元画像px
 
   loupeCtx.save();
   loupeCtx.clearRect(0, 0, px, px);
@@ -415,25 +429,23 @@ function showLoupe(ptView) {
   loupeCtx.arc(px / 2, px / 2, px / 2, 0, Math.PI * 2);
   loupeCtx.closePath();
   loupeCtx.clip();
-  // 背景は薄いグレー（＝画像の外。真っ白で「消えた」と誤解しないように）
-  loupeCtx.fillStyle = '#e2e8f0';
+  // 背景＝市松模様（＝画像の外。余白に出ているのが一目で分かる）
+  loupeCtx.fillStyle = getCheckerPattern();
   loupeCtx.fillRect(0, 0, px, px);
-  // 元解像度から拡大して描く（クリスプ）。画像外は描かれずグレーが残る
+  // 写真部分をクリスプに重ね描き（画像外は描かれず市松が残る）
   loupeCtx.imageSmoothingEnabled = true;
   loupeCtx.drawImage(state.bitmap, sxN, syN, winNative, winNative, 0, 0, px, px);
-  // 画像の縁（境界線）をルーペ内に描く＝「ここが画像の端」が分かる
-  const sc = px / winNative; // ルーペpx / 元画像px
+  // 写真の縁（境界線）＝「ここが写真の端」
   const bx = (0 - sxN) * sc, by = (0 - syN) * sc;
-  const bw = state.nativeW * sc, bh = state.nativeH * sc;
   loupeCtx.strokeStyle = 'rgba(37,99,235,0.9)';
   loupeCtx.lineWidth = 2 * dpr;
-  loupeCtx.strokeRect(bx, by, bw, bh);
-  // 十字＋中心リング
-  loupeCtx.strokeStyle = 'rgba(234,88,12,0.9)';
+  loupeCtx.strokeRect(bx, by, state.nativeW * sc, state.nativeH * sc);
+  // 十字＋リング（中心＝点の本当の位置）
+  loupeCtx.strokeStyle = 'rgba(234,88,12,0.95)';
   loupeCtx.lineWidth = 2 * dpr;
   loupeCtx.beginPath();
-  loupeCtx.moveTo(px / 2, px * 0.3); loupeCtx.lineTo(px / 2, px * 0.7);
-  loupeCtx.moveTo(px * 0.3, px / 2); loupeCtx.lineTo(px * 0.7, px / 2);
+  loupeCtx.moveTo(px / 2, px * 0.28); loupeCtx.lineTo(px / 2, px * 0.72);
+  loupeCtx.moveTo(px * 0.28, px / 2); loupeCtx.lineTo(px * 0.72, px / 2);
   loupeCtx.stroke();
   loupeCtx.beginPath();
   loupeCtx.arc(px / 2, px / 2, 7 * dpr, 0, Math.PI * 2);
