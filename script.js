@@ -366,17 +366,19 @@ window.addEventListener('resize', () => {
 
 /* ============================================================
  * OpenCV.js 遅延ロード（B）
- *  - 一度だけ読み込む（多重ロード防止）
- *  - 近年の opencv.js は配布形態が複数ある:
- *      (1) クラシック: window.cv が Module オブジェクト。
- *          初期化完了は cv.onRuntimeInitialized で通知。
- *      (2) Promise 形式: window.cv が Promise（解決値がモジュール）。
- *      (3) MODULARIZE 形式: window.cv が「呼び出すべきファクトリ関数」。
- *          関数を実行して初めて WASM 初期化が走る。
- *    これらを取りこぼすと cv.Mat が永遠に現れず固まるため、全形式に
- *    対応し、さらに「cv.Mat が使えるか」のポーリングを安全網にする。
+ *  - 複数 CDN へフォールバック。1 つが遅ければ短いタイムアウトで
+ *    次の CDN を追加投入し、最初に初期化できたものを採用する。
+ *    （docs.opencv.org は CDN ではなく低速・不達になりやすいため）
+ *  - 配布形態の違い（クラシック / Promise / MODULARIZE 関数）に対応。
+ *  - 「cv.Mat が使えるか」のポーリングを最終的な初期化判定にする。
  * ============================================================ */
-const OPENCV_URL = 'https://docs.opencv.org/4.x/opencv.js';
+const OPENCV_URLS = [
+  'https://docs.opencv.org/4.x/opencv.js',
+  'https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.js',
+  'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.11.0-release.1/dist/opencv.js',
+];
+const PER_ATTEMPT_MS = 18000;   // この時間で初期化しなければ次の CDN へ
+const OVERALL_MS = 90000;       // 全体の最終タイムアウト
 let cvLoadPromise = null;
 
 function ensureOpenCV() {
@@ -385,65 +387,72 @@ function ensureOpenCV() {
     const READY = () => window.cv && typeof window.cv.Mat === 'function';
 
     let settled = false;
-    let poller = null, timeout = null;
+    let poller = null, overall = null, attemptTimer = null, idx = 0;
+
     const finish = () => {
       if (settled) return;
       settled = true;
-      clearInterval(poller); clearTimeout(timeout);
+      clearInterval(poller); clearTimeout(overall); clearTimeout(attemptTimer);
       resolve(window.cv);
     };
-    const fail = (msg) => {
+    const failAll = (msg) => {
       if (settled) return;
       settled = true;
-      clearInterval(poller); clearTimeout(timeout);
-      cvLoadPromise = null; // 失敗をキャッシュせず、再試行を可能にする
+      clearInterval(poller); clearTimeout(overall); clearTimeout(attemptTimer);
+      cvLoadPromise = null; // 失敗はキャッシュせず再試行可能に
       reject(new Error(msg));
     };
 
     if (READY()) { resolve(window.cv); return; }
 
-    // ポーリング（最も確実な初期化検知）＋ タイムアウト（固まり防止）
-    poller = setInterval(() => { if (READY()) finish(); }, 100);
-    timeout = setTimeout(() => {
-      if (!READY()) fail('OpenCV.js の初期化がタイムアウトしました');
-    }, 45000);
+    // 初期化検知（全形態・全 CDN 共通の安全網）
+    poller = setInterval(() => { if (READY()) finish(); }, 120);
+    overall = setTimeout(() => {
+      if (!READY()) failAll('OpenCV.js を読み込めませんでした（全 CDN タイムアウト）');
+    }, OVERALL_MS);
 
-    // 解決値モジュールを window.cv へ反映し、初期化完了を待つ
+    // 解決値モジュールを window.cv に反映し、初期化完了を待つ
     const adopt = (mod) => {
       if (mod && typeof mod === 'object') {
         window.cv = mod;
         if (typeof mod.Mat === 'function') { finish(); return; }
-        // まだランタイム未初期化なら通知を仕掛ける（ポーリングも併用）
         try { mod.onRuntimeInitialized = () => finish(); } catch (_) {}
       }
     };
 
-    // 二重 <script> 挿入を避ける
-    let script = document.querySelector('script[data-opencv]');
-    if (!script) {
-      script = document.createElement('script');
-      script.src = OPENCV_URL;
-      script.async = true;
-      script.dataset.opencv = '1';
-      script.onload = () => {
-        try {
-          const c = window.cv;
-          if (typeof c === 'function') {
-            // (3) MODULARIZE: ファクトリを呼んで初めて初期化が走る
-            Promise.resolve(c()).then(adopt).catch(() => {});
-          } else if (c && typeof c.then === 'function') {
-            // (2) Promise 形式
-            c.then(adopt).catch(() => {});
-          } else if (c && typeof c === 'object') {
-            // (1) クラシック: コールバック（onload 前に発火済みでも
-            //     ポーリングが拾う）
-            try { c.onRuntimeInitialized = () => finish(); } catch (_) {}
-          }
-        } catch (_) { /* ポーリング/タイムアウトに委ねる */ }
-      };
-      script.onerror = () => fail('OpenCV.js の読み込みに失敗しました（ネットワーク/CDN）');
-      document.head.appendChild(script);
-    }
+    const handleLoad = () => {
+      try {
+        const c = window.cv;
+        if (typeof c === 'function') {
+          Promise.resolve(c()).then(adopt).catch(() => {}); // MODULARIZE 関数
+        } else if (c && typeof c.then === 'function') {
+          c.then(adopt).catch(() => {});                    // Promise 形式
+        } else if (c && typeof c === 'object') {
+          try { c.onRuntimeInitialized = () => finish(); } catch (_) {} // クラシック
+        }
+      } catch (_) { /* ポーリングに委ねる */ }
+    };
+
+    const tryNext = () => {
+      if (settled || READY()) return;
+      if (idx >= OPENCV_URLS.length) return; // 残りは overall タイムアウトが処理
+      const url = OPENCV_URLS[idx++];
+      setStatus('work',
+        `OpenCV を読み込み中…（${idx}/${OPENCV_URLS.length}・初回は数 MB の DL）`, true);
+
+      const s = document.createElement('script');
+      s.src = url;
+      s.async = true;
+      s.dataset.opencv = '1';
+      s.onload = handleLoad;
+      s.onerror = () => { clearTimeout(attemptTimer); tryNext(); }; // 即・次へ
+      document.head.appendChild(s);
+
+      clearTimeout(attemptTimer);
+      attemptTimer = setTimeout(() => { if (!READY()) tryNext(); }, PER_ATTEMPT_MS);
+    };
+
+    tryNext();
   });
   return cvLoadPromise;
 }
