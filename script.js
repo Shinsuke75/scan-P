@@ -346,4 +346,182 @@ window.addEventListener('resize', () => {
   }, 150);
 });
 
-console.log('[scan-P] ready (stage 3: vertex drag + loupe)');
+/* ============================================================
+ * OpenCV.js 遅延ロード（B）
+ *  - 一度だけ読み込む（多重ロード防止）
+ *  - cv が Promise / onRuntimeInitialized どちらの形式でも対応
+ * ============================================================ */
+const OPENCV_URL = 'https://docs.opencv.org/4.x/opencv.js';
+let cvLoadPromise = null;
+
+function ensureOpenCV() {
+  if (cvLoadPromise) return cvLoadPromise;
+  cvLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = OPENCV_URL;
+    script.async = true;
+    script.onload = () => {
+      const cvAny = window.cv;
+      if (cvAny && typeof cvAny.then === 'function') {
+        // 新しいビルドは cv が Promise
+        cvAny.then((target) => { window.cv = target; resolve(target); }, reject);
+      } else if (cvAny && cvAny.Mat) {
+        resolve(cvAny);
+      } else {
+        window.cv = window.cv || {};
+        window.cv.onRuntimeInitialized = () => resolve(window.cv);
+      }
+    };
+    script.onerror = () => reject(new Error('OpenCV.js の読み込みに失敗しました'));
+    document.head.appendChild(script);
+  });
+  return cvLoadPromise;
+}
+
+/* ============================================================
+ * 補正実行（4: 座標変換・並べ替え・出力サイズ算出・clamp・warp）
+ * ============================================================ */
+
+// 表示座標の頂点を元画像座標へ変換
+function pointsToNative(points) {
+  const inv = 1 / state.scale;
+  return points.map((p) => ({ x: p.x * inv, y: p.y * inv }));
+}
+
+// 4 点を 左上→右上→右下→左下 に正規化（任意順でも破綻しない）
+function orderCorners(pts) {
+  let tl = pts[0], tr = pts[0], br = pts[0], bl = pts[0];
+  let minSum = Infinity, maxSum = -Infinity, minDiff = Infinity, maxDiff = -Infinity;
+  for (const p of pts) {
+    const sum = p.x + p.y;   // 最小=左上, 最大=右下
+    const diff = p.y - p.x;  // 最小=右上, 最大=左下
+    if (sum < minSum) { minSum = sum; tl = p; }
+    if (sum > maxSum) { maxSum = sum; br = p; }
+    if (diff < minDiff) { minDiff = diff; tr = p; }
+    if (diff > maxDiff) { maxDiff = diff; bl = p; }
+  }
+  return [tl, tr, br, bl];
+}
+
+function dist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+// 出力サイズの上限（iOS Safari の Canvas 上限を考慮）
+const MAX_OUT_DIM = 4096;
+const MAX_OUT_PIXELS = 16 * 1024 * 1024; // 約 16M ピクセル
+
+// 並べ替え済みの 4 点（元座標）から出力サイズを算出し、上限に収める
+function computeOutputSize(ordered) {
+  const [tl, tr, br, bl] = ordered;
+  const wTop = dist(tl, tr);
+  const wBottom = dist(bl, br);
+  const hLeft = dist(tl, bl);
+  const hRight = dist(tr, br);
+  let outW = Math.max(wTop, wBottom);
+  let outH = Math.max(hLeft, hRight);
+
+  // 出力上限クランプ（アスペクト比保持）
+  let sc = 1;
+  sc = Math.min(sc, MAX_OUT_DIM / outW, MAX_OUT_DIM / outH);
+  if (outW * sc * outH * sc > MAX_OUT_PIXELS) {
+    sc = Math.min(sc, Math.sqrt(MAX_OUT_PIXELS / (outW * outH)));
+  }
+  outW = Math.max(1, Math.round(outW * sc));
+  outH = Math.max(1, Math.round(outH * sc));
+  return { outW, outH };
+}
+
+// 元解像度の cv.Mat を生成（ImageBitmap → 元サイズ canvas → imread）
+function readNativeMat(cv) {
+  const tmp = document.createElement('canvas');
+  tmp.width = state.nativeW;
+  tmp.height = state.nativeH;
+  const tctx = tmp.getContext('2d');
+  tctx.drawImage(state.bitmap, 0, 0, state.nativeW, state.nativeH);
+  const mat = cv.imread(tmp); // RGBA
+  return mat;
+}
+
+async function runWarp() {
+  if (!state.bitmap || state.points.length !== 4) return;
+  warpBtn.disabled = true;
+  setStatus('work', 'OpenCV を準備中…', true);
+
+  let cv;
+  try {
+    cv = await ensureOpenCV();
+  } catch (e) {
+    console.error(e);
+    setStatus('error', 'OpenCV.js の読み込みに失敗しました（ネットワークをご確認ください）');
+    warpBtn.disabled = false;
+    return;
+  }
+
+  setStatus('work', '台形補正を実行中…', true);
+  // 描画フレームを挟んでスピナーを反映させる
+  await new Promise((r) => requestAnimationFrame(() => r()));
+
+  let src = null, dst = null, M = null, srcTri = null, dstTri = null;
+  try {
+    // A: 表示座標 → 元座標へ変換してから使う
+    const native = pointsToNative(state.points);
+    const ordered = orderCorners(native);
+    const { outW, outH } = computeOutputSize(ordered);
+
+    src = readNativeMat(cv);
+
+    srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+      ordered[0].x, ordered[0].y,
+      ordered[1].x, ordered[1].y,
+      ordered[2].x, ordered[2].y,
+      ordered[3].x, ordered[3].y,
+    ]);
+    dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+      0, 0,
+      outW, 0,
+      outW, outH,
+      0, outH,
+    ]);
+
+    M = cv.getPerspectiveTransform(srcTri, dstTri);
+    dst = new cv.Mat();
+    cv.warpPerspective(
+      src, dst, M, new cv.Size(outW, outH),
+      cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255)
+    );
+
+    // 結果（カラー）を保持し、フィルタ適用して表示
+    if (state.warpedColor) { state.warpedColor.delete(); }
+    state.warpedColor = dst;
+    dst = null; // 所有権を state へ移譲（finally で delete しない）
+
+    renderResult();
+
+    dstPlaceholder.hidden = true;
+    filterGroup.hidden = false;
+    downloadGroup.hidden = false;
+    setStatus('done', `補正完了（${outW}×${outH}px）`);
+  } catch (e) {
+    console.error(e);
+    setStatus('error', '補正処理でエラーが発生しました');
+  } finally {
+    if (src) src.delete();
+    if (M) M.delete();
+    if (srcTri) srcTri.delete();
+    if (dstTri) dstTri.delete();
+    if (dst) dst.delete();
+    warpBtn.disabled = false;
+  }
+}
+
+// 結果 Mat にフィルタを適用して結果キャンバスへ表示（Stage 6 でフィルタ拡張）
+function renderResult() {
+  const cv = window.cv;
+  if (!cv || !state.warpedColor) return;
+  cv.imshow(dstCanvas, state.warpedColor);
+}
+
+warpBtn.addEventListener('click', () => { runWarp(); });
+
+console.log('[scan-P] ready (stage 4: perspective warp)');
