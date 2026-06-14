@@ -367,11 +367,14 @@ window.addEventListener('resize', () => {
 /* ============================================================
  * OpenCV.js 遅延ロード（B）
  *  - 一度だけ読み込む（多重ロード防止）
- *  - 初期化完了は「cv.Mat が使える」状態をポーリングで確認する。
- *    ビルドにより cv が Promise だったり、onRuntimeInitialized が
- *    onload より前に発火（特にキャッシュ時）して取りこぼすことがあり、
- *    コールバックだけに頼ると永遠に解決せず固まるため、安全網として
- *    ポーリング＋タイムアウトを併用する。
+ *  - 近年の opencv.js は配布形態が複数ある:
+ *      (1) クラシック: window.cv が Module オブジェクト。
+ *          初期化完了は cv.onRuntimeInitialized で通知。
+ *      (2) Promise 形式: window.cv が Promise（解決値がモジュール）。
+ *      (3) MODULARIZE 形式: window.cv が「呼び出すべきファクトリ関数」。
+ *          関数を実行して初めて WASM 初期化が走る。
+ *    これらを取りこぼすと cv.Mat が永遠に現れず固まるため、全形式に
+ *    対応し、さらに「cv.Mat が使えるか」のポーリングを安全網にする。
  * ============================================================ */
 const OPENCV_URL = 'https://docs.opencv.org/4.x/opencv.js';
 let cvLoadPromise = null;
@@ -400,10 +403,20 @@ function ensureOpenCV() {
     if (READY()) { resolve(window.cv); return; }
 
     // ポーリング（最も確実な初期化検知）＋ タイムアウト（固まり防止）
-    poller = setInterval(() => { if (READY()) finish(); }, 80);
+    poller = setInterval(() => { if (READY()) finish(); }, 100);
     timeout = setTimeout(() => {
       if (!READY()) fail('OpenCV.js の初期化がタイムアウトしました');
-    }, 60000);
+    }, 45000);
+
+    // 解決値モジュールを window.cv へ反映し、初期化完了を待つ
+    const adopt = (mod) => {
+      if (mod && typeof mod === 'object') {
+        window.cv = mod;
+        if (typeof mod.Mat === 'function') { finish(); return; }
+        // まだランタイム未初期化なら通知を仕掛ける（ポーリングも併用）
+        try { mod.onRuntimeInitialized = () => finish(); } catch (_) {}
+      }
+    };
 
     // 二重 <script> 挿入を避ける
     let script = document.querySelector('script[data-opencv]');
@@ -413,15 +426,22 @@ function ensureOpenCV() {
       script.async = true;
       script.dataset.opencv = '1';
       script.onload = () => {
-        const cvAny = window.cv;
-        if (cvAny && typeof cvAny.then === 'function') {
-          cvAny.then(() => finish(), () => {}); // Promise 形式
-        } else if (cvAny && typeof cvAny === 'object') {
-          cvAny.onRuntimeInitialized = () => finish(); // コールバック形式
-        }
-        // いずれもポーリングが安全網として拾う
+        try {
+          const c = window.cv;
+          if (typeof c === 'function') {
+            // (3) MODULARIZE: ファクトリを呼んで初めて初期化が走る
+            Promise.resolve(c()).then(adopt).catch(() => {});
+          } else if (c && typeof c.then === 'function') {
+            // (2) Promise 形式
+            c.then(adopt).catch(() => {});
+          } else if (c && typeof c === 'object') {
+            // (1) クラシック: コールバック（onload 前に発火済みでも
+            //     ポーリングが拾う）
+            try { c.onRuntimeInitialized = () => finish(); } catch (_) {}
+          }
+        } catch (_) { /* ポーリング/タイムアウトに委ねる */ }
       };
-      script.onerror = () => fail('OpenCV.js の読み込みに失敗しました（ネットワーク）');
+      script.onerror = () => fail('OpenCV.js の読み込みに失敗しました（ネットワーク/CDN）');
       document.head.appendChild(script);
     }
   });
@@ -655,9 +675,30 @@ function showAutoIndicator(on) {
   }
 }
 
+// エラー＋「再試行」ボタンをステータスに表示
+function showRetryStatus(message) {
+  statusEl.hidden = false;
+  statusEl.className = 'status error';
+  statusEl.innerHTML =
+    '<span>' + message + '</span>' +
+    '<button id="retryDetectBtn" class="btn btn-ghost" ' +
+    'style="margin-left:auto;padding:6px 12px;min-height:34px;">再試行</button>';
+  const btn = document.getElementById('retryDetectBtn');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      if (!state.bitmap) return;
+      startAutoDetect(state.loadToken);
+    });
+  }
+}
+
 async function startAutoDetect(token) {
   if (token !== state.loadToken || state.userAdjusted || activeIdx !== -1) return;
   showAutoIndicator(true);
+  // ステータスにも明示（モバイルはコンソールが見えないため）
+  if (!(window.cv && window.cv.Mat)) {
+    setStatus('work', 'OpenCV を読み込み中…（初回は数 MB の DL で時間がかかります）', true);
+  }
 
   let cv;
   try {
@@ -665,11 +706,16 @@ async function startAutoDetect(token) {
   } catch (e) {
     console.warn('[scan-P] OpenCV load failed during auto-detect', e);
     showAutoIndicator(false);
+    // 失敗を画面に出し、手動操作と再試行へ誘導
+    showRetryStatus('自動検出を準備できませんでした（' + e.message + '）');
     return;
   }
   // 画像が入れ替わった／手動操作開始なら中断
   if (token !== state.loadToken || state.userAdjusted || activeIdx !== -1) {
     showAutoIndicator(false);
+    if (token === state.loadToken && state.userAdjusted) {
+      setStatus('info', '手動で 4 点を調整中です');
+    }
     return;
   }
   // 重い処理の前に 1 フレーム譲ってインジケータを描画
