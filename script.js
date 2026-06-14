@@ -38,6 +38,10 @@ const state = {
   viewH: 0,          // 表示キャンバスの高さ（px）
   scale: 1,          // view / native（表示→元の変換は 1/scale）
   points: [],        // 表示座標系の頂点 [{x,y} x4]（TL,TR,BR,BL の並びを意図）
+  warpedColor: null, // 直近の補正結果（カラー）の cv.Mat
+  loadToken: 0,      // 画像入れ替え検出用トークン（古い自動検出の適用を防ぐ）
+  userAdjusted: false, // ユーザーが頂点を手動調整したか（自動検出の上書き抑止）
+  filter: 'color',   // 仕上げフィルタ
 };
 
 // ---- ステータス表示ユーティリティ ----
@@ -111,6 +115,8 @@ async function loadImageFile(file) {
   state.bitmap = bitmap;
   state.nativeW = bitmap.width;
   state.nativeH = bitmap.height;
+  state.loadToken++;
+  state.userAdjusted = false;
 
   renderSource();
 
@@ -120,9 +126,10 @@ async function loadImageFile(file) {
 
   warpBtn.disabled = false;
   setStatus('info',
-    `読み込み完了（${state.nativeW}×${state.nativeH}px）— 4 点を角に合わせてください`);
+    `読み込み完了（${state.nativeW}×${state.nativeH}px）— すぐに 4 点を調整できます`);
 
-  // Stage 5 でここから OpenCV 遅延ロード＆自動検出を起動する
+  // OpenCV を裏でロードし、自動輪郭検出を起動（UI はブロックしない）
+  startAutoDetect(state.loadToken);
 }
 
 // 元画像を「ビュー」サイズに縮小して表示キャンバスへ描画
@@ -219,6 +226,7 @@ overlayCanvas.addEventListener('pointerdown', (ev) => {
   const idx = hitTest(pos);
   if (idx === -1) return;
   activeIdx = idx;
+  state.userAdjusted = true; // 以後、自動検出結果で上書きしない
   overlayCanvas.setPointerCapture(ev.pointerId); // 外へ出ても追従
   overlayCanvas.style.cursor = 'grabbing';
   // つかんだ点をそのままポインタ位置へ
@@ -524,4 +532,145 @@ function renderResult() {
 
 warpBtn.addEventListener('click', () => { runWarp(); });
 
-console.log('[scan-P] ready (stage 4: perspective warp)');
+/* ============================================================
+ * 自動輪郭検出（2 / 5）
+ *  - OpenCV ロード完了後に、縮小コピー上で検出（モバイル負荷対策）
+ *  - 最大の四角形を検出し、元座標→表示座標へ戻して滑らかに移動
+ *  - ユーザーが既に頂点を触っていれば尊重して上書きしない
+ * ============================================================ */
+
+// 控えめな「自動検出中…」インジケータ
+let autoBadge = null;
+function showAutoIndicator(on) {
+  if (on) {
+    if (!autoBadge) {
+      autoBadge = document.createElement('div');
+      autoBadge.className = 'auto-badge';
+      autoBadge.innerHTML = '<span class="spinner"></span><span>自動検出中…</span>';
+      srcWrap.appendChild(autoBadge);
+    }
+    autoBadge.hidden = false;
+  } else if (autoBadge) {
+    autoBadge.hidden = true;
+  }
+}
+
+async function startAutoDetect(token) {
+  showAutoIndicator(true);
+
+  let cv;
+  try {
+    cv = await ensureOpenCV();
+  } catch (e) {
+    console.warn('[scan-P] OpenCV load failed during auto-detect', e);
+    showAutoIndicator(false);
+    return;
+  }
+  // 画像が入れ替わっていたら中断
+  if (token !== state.loadToken) { showAutoIndicator(false); return; }
+  // 重い処理の前に 1 フレーム譲ってインジケータを描画
+  await new Promise((r) => requestAnimationFrame(() => r()));
+
+  let nativePts = null;
+  try {
+    nativePts = detectDocument(cv);
+  } catch (e) {
+    console.warn('[scan-P] detectDocument error', e);
+  }
+  showAutoIndicator(false);
+
+  if (token !== state.loadToken) return;     // 古い結果は破棄
+  if (state.userAdjusted) return;            // 手動調整を尊重
+  if (!nativePts) {
+    setStatus('info', '自動検出できませんでした — 手動で 4 点を合わせてください');
+    return;
+  }
+
+  const ordered = orderCorners(nativePts);
+  const viewPts = ordered.map((p) => ({ x: p.x * state.scale, y: p.y * state.scale }));
+  animatePoints(viewPts);
+  setStatus('done', '書類の輪郭を自動検出しました — 必要なら微調整してください');
+}
+
+// 縮小コピー上で四角形輪郭を検出し、元画像座標の 4 点を返す（なければ null）
+function detectDocument(cv) {
+  const target = 900; // 検出用の長辺目安
+  const longSide = Math.max(state.nativeW, state.nativeH);
+  const dscale = Math.min(1, target / longSide);
+  const dw = Math.max(1, Math.round(state.nativeW * dscale));
+  const dh = Math.max(1, Math.round(state.nativeH * dscale));
+
+  const tmp = document.createElement('canvas');
+  tmp.width = dw; tmp.height = dh;
+  tmp.getContext('2d').drawImage(state.bitmap, 0, 0, dw, dh);
+
+  let src = cv.imread(tmp);
+  let gray = new cv.Mat();
+  let blur = new cv.Mat();
+  let edges = new cv.Mat();
+  let contours = new cv.MatVector();
+  let hierarchy = new cv.Mat();
+  let best = null;
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+    cv.Canny(blur, edges, 75, 200);
+    // 縁の途切れを閉じる
+    const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+    cv.dilate(edges, edges, k);
+    k.delete();
+
+    cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+    let maxArea = dw * dh * 0.18; // 画像の 18% 以上の四角形のみ採用
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      const peri = cv.arcLength(cnt, true);
+      const approx = new cv.Mat();
+      cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+      if (approx.rows === 4 && cv.isContourConvex(approx)) {
+        const area = Math.abs(cv.contourArea(approx));
+        if (area > maxArea) {
+          maxArea = area;
+          const pts = [];
+          for (let j = 0; j < 4; j++) {
+            pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
+          }
+          best = pts;
+        }
+      }
+      approx.delete();
+      cnt.delete();
+    }
+  } finally {
+    src.delete(); gray.delete(); blur.delete(); edges.delete();
+    contours.delete(); hierarchy.delete();
+  }
+
+  if (!best) return null;
+  // 縮小コピー座標 → 元画像座標へ
+  const inv = 1 / dscale;
+  return best.map((p) => ({ x: p.x * inv, y: p.y * inv }));
+}
+
+// 現在の頂点から目標位置へ滑らかに移動
+function animatePoints(target) {
+  const start = state.points.map((p) => ({ x: p.x, y: p.y }));
+  const dur = 300;
+  const t0 = performance.now();
+  function step(now) {
+    if (state.userAdjusted) { return; } // 途中で触られたら中断
+    const k = Math.min(1, (now - t0) / dur);
+    const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2; // easeInOut
+    state.points = target.map((tp, i) => ({
+      x: start[i].x + (tp.x - start[i].x) * e,
+      y: start[i].y + (tp.y - start[i].y) * e,
+    }));
+    drawOverlay();
+    if (k < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+console.log('[scan-P] ready (stage 5: auto contour detection)');
