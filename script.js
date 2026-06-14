@@ -43,6 +43,8 @@ const state = {
   loadToken: 0,      // 画像入れ替え検出用トークン（古い自動検出の適用を防ぐ）
   userAdjusted: false, // ユーザーが頂点を手動調整したか（自動検出の上書き抑止）
   filter: 'color',   // 仕上げフィルタ
+  autoDetectTimer: null, // 自動検出の遅延実行タイマー
+  autoDetectIdle: null,  // requestIdleCallback の ID
 };
 
 // ---- ステータス表示ユーティリティ ----
@@ -96,6 +98,7 @@ function makeFallbackPoints(viewW, viewH) {
  * 画像の読み込みと表示（C: EXIF 向き補正）
  * ============================================================ */
 async function loadImageFile(file) {
+  cancelAutoDetect();
   setStatus('work', '画像を読み込み中…', true);
 
   let bitmap;
@@ -137,8 +140,8 @@ async function loadImageFile(file) {
   setStatus('info',
     `読み込み完了（${state.nativeW}×${state.nativeH}px）— すぐに 4 点を調整できます`);
 
-  // OpenCV を裏でロードし、自動輪郭検出を起動（UI はブロックしない）
-  startAutoDetect(state.loadToken);
+  // 読み込み直後の手動調整を優先し、短い遅延後に自動検出を開始
+  scheduleAutoDetect(state.loadToken);
 }
 
 // 元画像を「ビュー」サイズに縮小して表示キャンバスへ描画
@@ -217,12 +220,12 @@ function toCanvasPos(ev) {
 // 当たった頂点 index を返す（なければ -1）
 function hitTest(pos) {
   const rect = overlayCanvas.getBoundingClientRect();
-  const sx = overlayCanvas.width / rect.width; // CSS→canvas 倍率
-  const hit = HIT_RADIUS * sx;                 // 当たり判定をキャンバス座標へ
-  let best = -1, bestD = hit * hit;
+  const sx = overlayCanvas.width / rect.width;
+  const sy = overlayCanvas.height / rect.height;
+  let best = -1, bestD = HIT_RADIUS * HIT_RADIUS;
   for (let i = 0; i < state.points.length; i++) {
-    const dx = state.points[i].x - pos.x;
-    const dy = state.points[i].y - pos.y;
+    const dx = (state.points[i].x - pos.x) / sx;
+    const dy = (state.points[i].y - pos.y) / sy;
     const d = dx * dx + dy * dy;
     if (d <= bestD) { bestD = d; best = i; }
   }
@@ -234,13 +237,11 @@ overlayCanvas.addEventListener('pointerdown', (ev) => {
   const pos = toCanvasPos(ev);
   const idx = hitTest(pos);
   if (idx === -1) return;
+  cancelAutoDetect();
   activeIdx = idx;
   state.userAdjusted = true; // 以後、自動検出結果で上書きしない
   overlayCanvas.setPointerCapture(ev.pointerId); // 外へ出ても追従
   overlayCanvas.style.cursor = 'grabbing';
-  // つかんだ点をそのままポインタ位置へ
-  state.points[idx].x = clamp(pos.x, 0, overlayCanvas.width);
-  state.points[idx].y = clamp(pos.y, 0, overlayCanvas.height);
   drawOverlay();
   showLoupe(state.points[idx]);
   ev.preventDefault();
@@ -607,6 +608,39 @@ warpBtn.addEventListener('click', () => { runWarp(); });
 
 // 控えめな「自動検出中…」インジケータ
 let autoBadge = null;
+const AUTO_DETECT_DELAY_MS = 650;
+
+function cancelAutoDetect() {
+  if (state.autoDetectTimer !== null) {
+    clearTimeout(state.autoDetectTimer);
+    state.autoDetectTimer = null;
+  }
+  if (state.autoDetectIdle !== null && typeof window.cancelIdleCallback === 'function') {
+    window.cancelIdleCallback(state.autoDetectIdle);
+    state.autoDetectIdle = null;
+  }
+}
+
+function scheduleAutoDetect(token) {
+  cancelAutoDetect();
+  state.autoDetectTimer = setTimeout(() => {
+    state.autoDetectTimer = null;
+    if (token !== state.loadToken || state.userAdjusted || activeIdx !== -1) return;
+    const run = () => {
+      if (token !== state.loadToken || state.userAdjusted || activeIdx !== -1) return;
+      startAutoDetect(token);
+    };
+    if (typeof window.requestIdleCallback === 'function') {
+      state.autoDetectIdle = window.requestIdleCallback(() => {
+        state.autoDetectIdle = null;
+        run();
+      }, { timeout: 900 });
+      return;
+    }
+    run();
+  }, AUTO_DETECT_DELAY_MS);
+}
+
 function showAutoIndicator(on) {
   if (on) {
     if (!autoBadge) {
@@ -622,6 +656,7 @@ function showAutoIndicator(on) {
 }
 
 async function startAutoDetect(token) {
+  if (token !== state.loadToken || state.userAdjusted || activeIdx !== -1) return;
   showAutoIndicator(true);
 
   let cv;
@@ -632,8 +667,11 @@ async function startAutoDetect(token) {
     showAutoIndicator(false);
     return;
   }
-  // 画像が入れ替わっていたら中断
-  if (token !== state.loadToken) { showAutoIndicator(false); return; }
+  // 画像が入れ替わった／手動操作開始なら中断
+  if (token !== state.loadToken || state.userAdjusted || activeIdx !== -1) {
+    showAutoIndicator(false);
+    return;
+  }
   // 重い処理の前に 1 フレーム譲ってインジケータを描画
   await new Promise((r) => requestAnimationFrame(() => r()));
 
@@ -646,7 +684,7 @@ async function startAutoDetect(token) {
   showAutoIndicator(false);
 
   if (token !== state.loadToken) return;     // 古い結果は破棄
-  if (state.userAdjusted) return;            // 手動調整を尊重
+  if (state.userAdjusted || activeIdx !== -1) return; // 手動調整を尊重
   if (!nativePts) {
     setStatus('info', '自動検出できませんでした — 手動で 4 点を合わせてください');
     return;
@@ -660,7 +698,7 @@ async function startAutoDetect(token) {
 
 // 縮小コピー上で四角形輪郭を検出し、元画像座標の 4 点を返す（なければ null）
 function detectDocument(cv) {
-  const target = 900; // 検出用の長辺目安
+  const target = 640; // 検出用の長辺目安（軽量化）
   const longSide = Math.max(state.nativeW, state.nativeH);
   const dscale = Math.min(1, target / longSide);
   const dw = Math.max(1, Math.round(state.nativeW * dscale));
@@ -687,7 +725,7 @@ function detectDocument(cv) {
     cv.dilate(edges, edges, k);
     k.delete();
 
-    cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
     let maxArea = dw * dh * 0.18; // 画像の 18% 以上の四角形のみ採用
     for (let i = 0; i < contours.size(); i++) {
