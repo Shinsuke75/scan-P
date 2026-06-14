@@ -39,7 +39,8 @@ const state = {
   viewH: 0,          // 表示キャンバスの高さ（px）
   scale: 1,          // view / native（表示→元の変換は 1/scale）
   points: [],        // 表示座標系の頂点 [{x,y} x4]（TL,TR,BR,BL の並びを意図）
-  warpedColor: null, // 直近の補正結果（カラー）の cv.Mat
+  warpedCanvas: null, // 直近の補正結果（カラー）の 2D キャンバス
+  baseImageData: null, // フィルタ再計算用のカラー ImageData キャッシュ
   loadToken: 0,      // 画像入れ替え検出用トークン（古い自動検出の適用を防ぐ）
   userAdjusted: false, // ユーザーが頂点を手動調整したか（自動検出の上書き抑止）
   filter: 'color',   // 仕上げフィルタ
@@ -123,7 +124,8 @@ async function loadImageFile(file) {
   state.userAdjusted = false;
 
   // 前回の結果を解放し、結果パネルをリセット
-  if (state.warpedColor) { state.warpedColor.delete(); state.warpedColor = null; }
+  state.warpedCanvas = null;
+  state.baseImageData = null;
   dstCtx.clearRect(0, 0, dstCanvas.width, dstCanvas.height);
   dstCanvas.width = 0; dstCanvas.height = 0;
   dstPlaceholder.hidden = false;
@@ -377,8 +379,8 @@ const OPENCV_URLS = [
   'https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.js',
   'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.11.0-release.1/dist/opencv.js',
 ];
-const PER_ATTEMPT_MS = 18000;   // この時間で初期化しなければ次の CDN へ
-const OVERALL_MS = 90000;       // 全体の最終タイムアウト
+const PER_ATTEMPT_MS = 12000;   // この時間で初期化しなければ次の CDN へ
+const OVERALL_MS = 45000;       // 全体の最終タイムアウト
 let cvLoadPromise = null;
 
 function ensureOpenCV() {
@@ -437,9 +439,6 @@ function ensureOpenCV() {
       if (settled || READY()) return;
       if (idx >= OPENCV_URLS.length) return; // 残りは overall タイムアウトが処理
       const url = OPENCV_URLS[idx++];
-      setStatus('work',
-        `OpenCV を読み込み中…（${idx}/${OPENCV_URLS.length}・初回は数 MB の DL）`, true);
-
       const s = document.createElement('script');
       s.src = url;
       s.async = true;
@@ -511,70 +510,252 @@ function computeOutputSize(ordered) {
   return { outW, outH };
 }
 
-// 元解像度の cv.Mat を生成（ImageBitmap → 元サイズ canvas → imread）
-function readNativeMat(cv) {
-  const tmp = document.createElement('canvas');
-  tmp.width = state.nativeW;
-  tmp.height = state.nativeH;
-  const tctx = tmp.getContext('2d');
-  tctx.drawImage(state.bitmap, 0, 0, state.nativeW, state.nativeH);
-  const mat = cv.imread(tmp); // RGBA
-  return mat;
+/* ============================================================
+ * 射影変換は WebGL で行う（OpenCV 非依存・追加 DL ゼロ・GPU 高速）
+ *  - 元解像度のビットマップをテクスチャに載せ、出力矩形へ
+ *    ホモグラフィでサンプリングする（A: 元解像度で変換）。
+ * ============================================================ */
+let glState = null; // { canvas, gl, prog, uH, aPos, uTex, buf }
+
+function initGL() {
+  if (glState) return glState;
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl', { premultipliedAlpha: false }) ||
+             canvas.getContext('experimental-webgl');
+  if (!gl) return null;
+
+  const vsSrc =
+    'attribute vec2 aPos; varying vec2 vOut;' +
+    'void main(){ vOut = aPos;' +
+    ' gl_Position = vec4(aPos.x*2.0-1.0, 1.0-aPos.y*2.0, 0.0, 1.0); }';
+  const fsSrc =
+    'precision highp float; varying vec2 vOut;' +
+    'uniform mat3 uH; uniform sampler2D uTex;' +
+    'void main(){ vec3 p = uH * vec3(vOut, 1.0); vec2 tc = p.xy / p.z;' +
+    ' if (tc.x < 0.0 || tc.x > 1.0 || tc.y < 0.0 || tc.y > 1.0) {' +
+    '   gl_FragColor = vec4(1.0,1.0,1.0,1.0);' +
+    ' } else { gl_FragColor = texture2D(uTex, tc); } }';
+
+  const compile = (type, src) => {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      console.error('[scan-P] shader error', gl.getShaderInfoLog(sh));
+      return null;
+    }
+    return sh;
+  };
+  const vs = compile(gl.VERTEX_SHADER, vsSrc);
+  const fs = compile(gl.FRAGMENT_SHADER, fsSrc);
+  if (!vs || !fs) return null;
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('[scan-P] program link error', gl.getProgramInfoLog(prog));
+    return null;
+  }
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  // 出力正規化座標の 4 隅（TL,TR,BR,BL）を TRIANGLE_FAN で
+  gl.bufferData(gl.ARRAY_BUFFER,
+    new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]), gl.STATIC_DRAW);
+
+  glState = {
+    canvas, gl, prog,
+    uH: gl.getUniformLocation(prog, 'uH'),
+    uTex: gl.getUniformLocation(prog, 'uTex'),
+    aPos: gl.getAttribLocation(prog, 'aPos'),
+    buf,
+  };
+  return glState;
+}
+
+// 8x8 連立一次方程式を部分ピボット付きガウス消去で解く
+function gaussSolve(A, b) {
+  const n = b.length;
+  const M = A.map((row, i) => row.concat(b[i]));
+  for (let col = 0; col < n; col++) {
+    let piv = col;
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
+    }
+    if (Math.abs(M[piv][col]) < 1e-12) return null;
+    [M[col], M[piv]] = [M[piv], M[col]];
+    const d = M[col][col];
+    for (let c = col; c <= n; c++) M[col][c] /= d;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = M[r][col];
+      if (f === 0) continue;
+      for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c];
+    }
+  }
+  return M.map((row) => row[n]);
+}
+
+// from[4]→to[4] のホモグラフィを GLSL mat3（列優先 9 要素）で返す
+function solveHomography(from, to) {
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = from[i];
+    const [u, v] = to[i];
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+  }
+  const h = gaussSolve(A, b);
+  if (!h) return null;
+  const [a, bb, c, d, e, f, g, hh] = h;
+  // 行優先 [[a,bb,c],[d,e,f],[g,hh,1]] → GLSL 列優先
+  return [a, d, g, bb, e, hh, c, f, 1];
+}
+
+// WebGL で射影変換し、結果を 2D キャンバスに描いて返す（失敗時 null）
+function warpWithWebGL(orderedNative, outW, outH) {
+  const S = initGL();
+  if (!S) return null;
+  const { gl, prog, buf } = S;
+
+  S.canvas.width = outW;
+  S.canvas.height = outH;
+  gl.viewport(0, 0, outW, outH);
+
+  // 元解像度テクスチャ（上下反転なし: texcoord(0,0)=画像左上）
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+  // テクスチャ上限を超える巨大写真は、テクスチャ用にのみ縮小（座標は正規化）
+  let texSrc = state.bitmap;
+  const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096;
+  const longSide = Math.max(state.nativeW, state.nativeH);
+  if (longSide > maxTex) {
+    const s = maxTex / longSide;
+    const tw = Math.max(1, Math.round(state.nativeW * s));
+    const th = Math.max(1, Math.round(state.nativeH * s));
+    const tc = document.createElement('canvas');
+    tc.width = tw; tc.height = th;
+    tc.getContext('2d').drawImage(state.bitmap, 0, 0, tw, th);
+    texSrc = tc;
+  }
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texSrc);
+
+  // 出力正規化(0..1) → 元テクスチャ座標(0..1) のホモグラフィ
+  const from = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  const to = orderedNative.map((p) => [p.x / state.nativeW, p.y / state.nativeH]);
+  const H = solveHomography(from, to);
+  if (!H) { gl.deleteTexture(tex); return null; }
+
+  gl.useProgram(prog);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.enableVertexAttribArray(S.aPos);
+  gl.vertexAttribPointer(S.aPos, 2, gl.FLOAT, false, 0, 0);
+  gl.uniformMatrix3fv(S.uH, false, new Float32Array(H));
+  gl.uniform1i(S.uTex, 0);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+
+  gl.clearColor(1, 1, 1, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+  gl.deleteTexture(tex);
+
+  // WebGL キャンバスを 2D キャンバスへ複製（以降の処理・保存用）
+  const out = document.createElement('canvas');
+  out.width = outW; out.height = outH;
+  out.getContext('2d').drawImage(S.canvas, 0, 0);
+  return out;
+}
+
+// WebGL が使えない場合の純 JS フォールバック（逆写像＋バイリニア）
+function warpWithJS(orderedNative, outW, outH) {
+  // 元画像のピクセルを取得
+  const sc = document.createElement('canvas');
+  sc.width = state.nativeW; sc.height = state.nativeH;
+  const sctx = sc.getContext('2d');
+  sctx.drawImage(state.bitmap, 0, 0);
+  const sImg = sctx.getImageData(0, 0, state.nativeW, state.nativeH);
+  const sData = sImg.data, sw = state.nativeW, sh = state.nativeH;
+
+  // 出力正規化 → 元座標(px) のホモグラフィ
+  const from = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  const to = orderedNative.map((p) => [p.x, p.y]);
+  const h = (() => {
+    const A = [], b = [];
+    for (let i = 0; i < 4; i++) {
+      const [x, y] = from[i], [u, v] = to[i];
+      A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+      A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+    }
+    return gaussSolve(A, b);
+  })();
+  if (!h) return null;
+  const [a, bb, c, d, e, f, g, hh] = h;
+
+  const out = document.createElement('canvas');
+  out.width = outW; out.height = outH;
+  const octx = out.getContext('2d');
+  const oImg = octx.createImageData(outW, outH);
+  const oData = oImg.data;
+
+  for (let oy = 0; oy < outH; oy++) {
+    const ny = (oy + 0.5) / outH;
+    for (let ox = 0; ox < outW; ox++) {
+      const nx = (ox + 0.5) / outW;
+      const w = g * nx + hh * ny + 1;
+      const sx = (a * nx + bb * ny + c) / w;
+      const sy = (d * nx + e * ny + f) / w;
+      const di = (oy * outW + ox) * 4;
+      if (sx < 0 || sx > sw - 1 || sy < 0 || sy > sh - 1) {
+        oData[di] = oData[di + 1] = oData[di + 2] = 255; oData[di + 3] = 255;
+        continue;
+      }
+      const x0 = sx | 0, y0 = sy | 0;
+      const x1 = Math.min(x0 + 1, sw - 1), y1 = Math.min(y0 + 1, sh - 1);
+      const fx = sx - x0, fy = sy - y0;
+      const i00 = (y0 * sw + x0) * 4, i10 = (y0 * sw + x1) * 4;
+      const i01 = (y1 * sw + x0) * 4, i11 = (y1 * sw + x1) * 4;
+      for (let k = 0; k < 3; k++) {
+        const top = sData[i00 + k] * (1 - fx) + sData[i10 + k] * fx;
+        const bot = sData[i01 + k] * (1 - fx) + sData[i11 + k] * fx;
+        oData[di + k] = (top * (1 - fy) + bot * fy) | 0;
+      }
+      oData[di + 3] = 255;
+    }
+  }
+  octx.putImageData(oImg, 0, 0);
+  return out;
 }
 
 async function runWarp() {
   if (!state.bitmap || state.points.length !== 4) return;
   warpBtn.disabled = true;
-  setStatus('work', 'OpenCV を準備中…', true);
-
-  let cv;
-  try {
-    cv = await ensureOpenCV();
-  } catch (e) {
-    console.error(e);
-    setStatus('error', 'OpenCV.js の読み込みに失敗しました（ネットワークをご確認ください）');
-    warpBtn.disabled = false;
-    return;
-  }
-
   setStatus('work', '台形補正を実行中…', true);
-  // 描画フレームを挟んでスピナーを反映させる
   await new Promise((r) => requestAnimationFrame(() => r()));
 
-  let src = null, dst = null, M = null, srcTri = null, dstTri = null;
   try {
-    // A: 表示座標 → 元座標へ変換してから使う
+    // A: 表示座標 → 元座標へ変換し、TL,TR,BR,BL に正規化
     const native = pointsToNative(state.points);
     const ordered = orderCorners(native);
     const { outW, outH } = computeOutputSize(ordered);
 
-    src = readNativeMat(cv);
+    let result = warpWithWebGL(ordered, outW, outH);
+    if (!result) {
+      setStatus('work', '台形補正を実行中…（CPU フォールバック）', true);
+      await new Promise((r) => requestAnimationFrame(() => r()));
+      result = warpWithJS(ordered, outW, outH);
+    }
+    if (!result) { setStatus('error', '補正に失敗しました（頂点の配置をご確認ください）'); return; }
 
-    srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-      ordered[0].x, ordered[0].y,
-      ordered[1].x, ordered[1].y,
-      ordered[2].x, ordered[2].y,
-      ordered[3].x, ordered[3].y,
-    ]);
-    dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-      0, 0,
-      outW, 0,
-      outW, outH,
-      0, outH,
-    ]);
-
-    M = cv.getPerspectiveTransform(srcTri, dstTri);
-    dst = new cv.Mat();
-    cv.warpPerspective(
-      src, dst, M, new cv.Size(outW, outH),
-      cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255)
-    );
-
-    // 結果（カラー）を保持し、フィルタ適用して表示
-    if (state.warpedColor) { state.warpedColor.delete(); }
-    state.warpedColor = dst;
-    dst = null; // 所有権を state へ移譲（finally で delete しない）
-
+    state.warpedCanvas = result;
+    state.baseImageData = null; // フィルタ用キャッシュを無効化
     renderResult();
 
     dstPlaceholder.hidden = true;
@@ -585,45 +766,81 @@ async function runWarp() {
     console.error(e);
     setStatus('error', '補正処理でエラーが発生しました');
   } finally {
-    if (src) src.delete();
-    if (M) M.delete();
-    if (srcTri) srcTri.delete();
-    if (dstTri) dstTri.delete();
-    if (dst) dst.delete();
     warpBtn.disabled = false;
   }
 }
 
-// 結果 Mat に仕上げフィルタを適用して結果キャンバスへ表示
+/* ============================================================
+ * 仕上げフィルタ（純 JS）: カラー / グレー / 白黒2値化
+ *  - 2値化は積分画像による適応的しきい値（紙のスキャン風）
+ * ============================================================ */
+function getBaseImageData() {
+  if (state.baseImageData) return state.baseImageData;
+  const c = state.warpedCanvas;
+  const ctx = c.getContext('2d');
+  state.baseImageData = ctx.getImageData(0, 0, c.width, c.height);
+  return state.baseImageData;
+}
+
 function renderResult() {
-  const cv = window.cv;
-  if (!cv || !state.warpedColor) return;
-  const base = state.warpedColor;
+  if (!state.warpedCanvas) return;
+  const w = state.warpedCanvas.width, h = state.warpedCanvas.height;
+  dstCanvas.width = w; dstCanvas.height = h;
 
   if (state.filter === 'color') {
-    cv.imshow(dstCanvas, base);
+    dstCtx.drawImage(state.warpedCanvas, 0, 0);
     return;
   }
 
-  let gray = new cv.Mat();
-  let bw = null;
-  try {
-    cv.cvtColor(base, gray, cv.COLOR_RGBA2GRAY);
-    if (state.filter === 'gray') {
-      cv.imshow(dstCanvas, gray);
-      return;
-    }
-    // 白黒 2 値化（紙のスキャン風）: 適応的しきい値
-    bw = new cv.Mat();
-    cv.adaptiveThreshold(
-      gray, bw, 255,
-      cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 15, 10
-    );
-    cv.imshow(dstCanvas, bw);
-  } finally {
-    gray.delete();
-    if (bw) bw.delete();
+  const base = getBaseImageData();
+  const src = base.data;
+  const n = w * h;
+  const gray = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const j = i * 4;
+    gray[i] = 0.299 * src[j] + 0.587 * src[j + 1] + 0.114 * src[j + 2];
   }
+
+  const out = dstCtx.createImageData(w, h);
+  const o = out.data;
+
+  if (state.filter === 'gray') {
+    for (let i = 0; i < n; i++) {
+      const v = gray[i] | 0, j = i * 4;
+      o[j] = o[j + 1] = o[j + 2] = v; o[j + 3] = 255;
+    }
+    dstCtx.putImageData(out, 0, 0);
+    return;
+  }
+
+  // 白黒2値化: 積分画像で各画素の周辺平均としきい値比較（適応的）
+  const integ = new Float64Array((w + 1) * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let rowSum = 0;
+    for (let x = 0; x < w; x++) {
+      rowSum += gray[y * w + x];
+      integ[(y + 1) * (w + 1) + (x + 1)] = integ[y * (w + 1) + (x + 1)] + rowSum;
+    }
+  }
+  const rad = Math.max(8, Math.round(Math.min(w, h) * 0.02)); // 窓半径
+  const C = 10; // しきい値オフセット
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.max(0, y - rad), y1 = Math.min(h - 1, y + rad);
+    for (let x = 0; x < w; x++) {
+      const x0 = Math.max(0, x - rad), x1 = Math.min(w - 1, x + rad);
+      const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+      const sum =
+        integ[(y1 + 1) * (w + 1) + (x1 + 1)] -
+        integ[(y0) * (w + 1) + (x1 + 1)] -
+        integ[(y1 + 1) * (w + 1) + (x0)] +
+        integ[(y0) * (w + 1) + (x0)];
+      const mean = sum / area;
+      const i = y * w + x, j = i * 4;
+      const v = gray[i] > (mean - C) ? 255 : 0;
+      o[j] = o[j + 1] = o[j + 2] = v; o[j + 3] = 255;
+    }
+  }
+  dstCtx.putImageData(out, 0, 0);
 }
 
 warpBtn.addEventListener('click', () => { runWarp(); });
@@ -675,7 +892,7 @@ function showAutoIndicator(on) {
     if (!autoBadge) {
       autoBadge = document.createElement('div');
       autoBadge.className = 'auto-badge';
-      autoBadge.innerHTML = '<span class="spinner"></span><span>自動検出中…</span>';
+      autoBadge.innerHTML = '<span class="spinner"></span><span>自動検出中…（任意）</span>';
       srcWrap.appendChild(autoBadge);
     }
     autoBadge.hidden = false;
@@ -704,10 +921,6 @@ function showRetryStatus(message) {
 async function startAutoDetect(token) {
   if (token !== state.loadToken || state.userAdjusted || activeIdx !== -1) return;
   showAutoIndicator(true);
-  // ステータスにも明示（モバイルはコンソールが見えないため）
-  if (!(window.cv && window.cv.Mat)) {
-    setStatus('work', 'OpenCV を読み込み中…（初回は数 MB の DL で時間がかかります）', true);
-  }
 
   let cv;
   try {
@@ -715,8 +928,8 @@ async function startAutoDetect(token) {
   } catch (e) {
     console.warn('[scan-P] OpenCV load failed during auto-detect', e);
     showAutoIndicator(false);
-    // 失敗を画面に出し、手動操作と再試行へ誘導
-    showRetryStatus('自動検出を準備できませんでした（' + e.message + '）');
+    // 自動検出は任意機能。失敗しても手動で補正できる旨を伝える
+    showRetryStatus('自動検出は使えませんでした（手動で 4 点を合わせて「補正実行」で OK）');
     return;
   }
   // 画像が入れ替わった／手動操作開始なら中断
@@ -837,7 +1050,7 @@ function animatePoints(target) {
  * ============================================================ */
 filterGroup.querySelectorAll('.seg-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
-    if (!state.warpedColor) return;
+    if (!state.warpedCanvas) return;
     filterGroup.querySelectorAll('.seg-btn').forEach((b) => b.classList.remove('is-active'));
     btn.classList.add('is-active');
     state.filter = btn.dataset.filter;
@@ -846,7 +1059,7 @@ filterGroup.querySelectorAll('.seg-btn').forEach((btn) => {
 });
 
 function downloadResult(mime, ext, quality) {
-  if (!state.warpedColor) return;
+  if (!state.warpedCanvas) return;
   const url = dstCanvas.toDataURL(mime, quality);
   const a = document.createElement('a');
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
