@@ -32,7 +32,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = '2026-06-14 v12';
+const BUILD = '2026-06-14 v13';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -243,6 +243,15 @@ const HIT_RADIUS = 26;   // 当たり判定半径（CSS px 基準）
 let activeIdx = -1;      // ドラッグ中の頂点 index（-1=なし）
 let activeEdge = -1;     // ドラッグ中の辺 index（-1=なし）
 let lastPos = null;      // 辺ドラッグ用の前回ポインタ位置
+let edgeDirA = null;     // 辺ドラッグ時、端点 A が沿う隣辺の方向（固定）
+let edgeDirB = null;     // 辺ドラッグ時、端点 B が沿う隣辺の方向（固定）
+
+// 単位ベクトル（長さ0近傍は null）
+function unitVec(x, y) {
+  const L = Math.hypot(x, y);
+  if (L < 1e-6) return null;
+  return { x: x / L, y: y / L };
+}
 
 // クライアント座標 → キャンバス（表示）座標
 function toCanvasPos(ev) {
@@ -299,6 +308,11 @@ overlayCanvas.addEventListener('pointerdown', (ev) => {
     if (e === -1) return;
     activeEdge = e;
     lastPos = { x: pos.x, y: pos.y };
+    // 隣接2辺の向きを固定（端点はこの線上をスライド＝隣辺の形状を保つ）
+    const pA = state.points[e], farA = state.points[(e + 3) % 4];
+    const pB = state.points[(e + 1) % 4], farB = state.points[(e + 2) % 4];
+    edgeDirA = unitVec(pA.x - farA.x, pA.y - farA.y);
+    edgeDirB = unitVec(pB.x - farB.x, pB.y - farB.y);
   }
   state.userAdjusted = true; // 以後、自動検出結果で上書きしない
   overlayCanvas.setPointerCapture(ev.pointerId); // 外へ出ても追従
@@ -319,24 +333,37 @@ overlayCanvas.addEventListener('pointermove', (ev) => {
     drawOverlay();
     showLoupe(state.points[activeIdx]);
   } else {
-    // 辺ドラッグ：その辺の両端を同じ量だけ動かす＝辺を平行移動
+    // 辺ドラッグ：両端を「隣の辺の線上」だけスライドさせる。
+    // これで隣接2辺は向き（直線）を保ち、向かい側の辺は完全固定。
     const dx = pos.x - lastPos.x, dy = pos.y - lastPos.y;
     const a = state.points[activeEdge], b = state.points[(activeEdge + 1) % 4];
-    a.x = clamp(a.x + dx, 0, overlayCanvas.width);
-    a.y = clamp(a.y + dy, 0, overlayCanvas.height);
-    b.x = clamp(b.x + dx, 0, overlayCanvas.width);
-    b.y = clamp(b.y + dy, 0, overlayCanvas.height);
+    slideAlong(a, edgeDirA, dx, dy);
+    slideAlong(b, edgeDirB, dx, dy);
     lastPos = { x: pos.x, y: pos.y };
     drawOverlay();
     showLoupe({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
   }
 });
 
+// 点 pt を方向 dir に沿って、ドラッグ量(dx,dy)の射影分だけ動かす
+// dir が null（隣辺が退化）の場合はそのまま平行移動にフォールバック
+function slideAlong(pt, dir, dx, dy) {
+  if (!dir) {
+    pt.x = clamp(pt.x + dx, 0, overlayCanvas.width);
+    pt.y = clamp(pt.y + dy, 0, overlayCanvas.height);
+    return;
+  }
+  const t = dx * dir.x + dy * dir.y; // 隣辺方向への射影
+  pt.x = clamp(pt.x + dir.x * t, 0, overlayCanvas.width);
+  pt.y = clamp(pt.y + dir.y * t, 0, overlayCanvas.height);
+}
+
 function endDrag(ev) {
   if (activeIdx === -1 && activeEdge === -1) return;
   activeIdx = -1;
   activeEdge = -1;
   lastPos = null;
+  edgeDirA = edgeDirB = null;
   overlayCanvas.style.cursor = 'grab';
   hideLoupe();
   drawOverlay();
@@ -1051,4 +1078,7 @@ function downloadResult(mime, ext, quality) {
 downloadPngBtn.addEventListener('click', () => downloadResult('image/png', 'png'));
 downloadJpgBtn.addEventListener('click', () => downloadResult('image/jpeg', 'jpg', 0.92));
 
-console.log('[scan-P] ready (stage 6: filters + download)');
+// 読み取り専用デバッグフック（テスト用・副作用なし）
+window.__dbgPoints = () => state.points.map((p) => ({ x: p.x, y: p.y }));
+
+console.log('[scan-P] ready (' + BUILD + ')');
