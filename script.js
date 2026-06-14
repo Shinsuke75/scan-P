@@ -30,6 +30,11 @@ const srcCtx = srcCanvas.getContext('2d');
 const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
+// ビルド表示（キャッシュ確認用）。変更のたびに更新する。
+const BUILD = '2026-06-14 v9';
+const buildStampEl = document.getElementById('buildStamp');
+if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
+
 // ---- アプリ状態 ----
 const state = {
   bitmap: null,      // EXIF 補正済みの元解像度 ImageBitmap
@@ -968,8 +973,8 @@ async function startAutoDetect(token) {
   } catch (e) {
     console.warn('[scan-P] OpenCV load failed during auto-detect', e);
     showAutoIndicator(false);
-    // 自動検出は任意機能。失敗しても手動で補正できる旨を伝える
-    showRetryStatus('自動検出は使えませんでした（手動で 4 点を合わせて「補正実行」で OK）');
+    // 自動検出は任意機能。失敗しても核心機能は動くので穏やかに案内のみ。
+    setStatus('info', '手動で 4 点を角に合わせて「補正実行」を押してください');
     return;
   }
   // 画像が入れ替わった／手動操作開始なら中断
