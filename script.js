@@ -37,7 +37,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = '2026-06-14 v15';
+const BUILD = '2026-06-14 v16';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -435,7 +435,7 @@ function showLoupe(ptView) {
   positionLoupe(ptView);
 }
 
-// ルーペを指で隠れない位置（基本は上、上端付近なら下）へ
+// ルーペは「点と反対側のすみ」に表示し、作業中の角を隠さないようにする
 function positionLoupe(ptView) {
   const oRect = overlayCanvas.getBoundingClientRect();
   const wRect = srcWrap.getBoundingClientRect();
@@ -443,12 +443,11 @@ function positionLoupe(ptView) {
   const cssScaleY = oRect.height / overlayCanvas.height;
   const cx = (oRect.left - wRect.left) + ptView.x * cssScaleX;
   const cy = (oRect.top - wRect.top) + ptView.y * cssScaleY;
+  const W = srcWrap.clientWidth, H = srcWrap.clientHeight;
 
-  let left = cx - LOUPE_SIZE / 2;
-  let top = cy - LOUPE_SIZE - 24;        // 既定は指の上
-  if (top < 4) top = cy + 24;            // 上端付近なら下に出す
-  left = clamp(left, 4, srcWrap.clientWidth - LOUPE_SIZE - 4);
-  top = clamp(top, 4, srcWrap.clientHeight - LOUPE_SIZE - 4);
+  // 点が右側なら左へ、左側なら右へ／上側なら下へ、下側なら上へ（対角のすみ）
+  const left = (cx > W / 2) ? 8 : (W - LOUPE_SIZE - 8);
+  const top = (cy > H / 2) ? 8 : (H - LOUPE_SIZE - 8);
   loupe.style.left = left + 'px';
   loupe.style.top = top + 'px';
 }
@@ -816,7 +815,7 @@ async function runWarp() {
 
     dstPlaceholder.hidden = true;
     resultTools.hidden = false;
-    bwRow.hidden = state.filter !== 'bw';
+    updateBwRow();
     setStatus('done', `補正完了（${result.width}×${result.height}px）`);
     // モバイルでは結果が画面外（下）に出るため、結果ツールへスクロールして見せる
     try { resultTools.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (_) {}
@@ -1102,13 +1101,20 @@ function animatePoints(target) {
 /* ============================================================
  * 仕上げフィルタ / 回転 / 保存（結果パネル内ツール）
  * ============================================================ */
+// 濃さ行の有効/無効を仕上げに合わせて切替（白黒のみ操作可）
+function updateBwRow() {
+  const on = state.filter === 'bw';
+  bwThresh.disabled = !on;
+  bwRow.classList.toggle('is-disabled', !on);
+}
+
 filterSeg.querySelectorAll('.seg-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     if (!state.warpedCanvas) return;
     filterSeg.querySelectorAll('.seg-btn').forEach((b) => b.classList.remove('is-active'));
     btn.classList.add('is-active');
     state.filter = btn.dataset.filter;
-    bwRow.hidden = state.filter !== 'bw'; // 白黒のときだけ濃さスライダー
+    updateBwRow();
     renderResult();
   });
 });

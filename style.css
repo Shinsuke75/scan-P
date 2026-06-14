@@ -256,10 +256,48 @@ body {
   accent-color: var(--primary);
   touch-action: none;
 }
+.result-tools input[type="range"]:disabled {
+  accent-color: #cbd5e1;
+  opacity: 0.6;
+}
 .rng-end {
   font-size: 0.85rem;
   color: var(--muted);
   font-weight: 700;
+}
+/* 白黒のみの行：白黒以外では淡色＋操作不可 */
+#bwRow.is-disabled { opacity: 0.5; }
+.only-note {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #fff;
+  background: var(--muted);
+  border-radius: 6px;
+  padding: 1px 6px;
+  vertical-align: middle;
+}
+.save-row { margin-top: 2px; }
+.save-hint {
+  margin: 2px 2px 0;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.save-hint b { color: var(--ink); }
+
+/* 元画像パネル下の主要アクション */
+.src-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.src-actions .btn { flex: 1; }
+.btn-big {
+  font-size: 1.05rem;
+  padding: 14px 18px;
+  min-height: 50px;
 }
 
 #srcCanvas,
