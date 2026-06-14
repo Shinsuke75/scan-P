@@ -208,6 +208,60 @@ body {
   border: 1px dashed var(--border);
   border-radius: 10px;
   overflow: hidden;
+  /* iOS の長押しメニュー（コピー/検索）・テキスト選択を抑止 */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#srcCanvas,
+#overlayCanvas,
+#dstCanvas {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 結果パネルの後処理ツール */
+.result-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.tool-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tool-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--muted);
+  min-width: 3.2em;
+}
+.btn-sm {
+  font-size: 0.9rem;
+  padding: 8px 12px;
+  min-height: 38px;
+}
+#rotFine {
+  flex: 1;
+  min-width: 90px;
+  accent-color: var(--primary);
+  touch-action: none;
+}
+.rot-val {
+  font-size: 0.85rem;
+  color: var(--ink);
+  font-weight: 600;
+  min-width: 2.6em;
+  text-align: right;
 }
 
 #srcCanvas,

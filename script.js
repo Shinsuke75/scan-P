@@ -22,8 +22,13 @@ const srcWrap = document.getElementById('srcWrap');
 const srcPlaceholder = document.getElementById('srcPlaceholder');
 const dstPlaceholder = document.getElementById('dstPlaceholder');
 const statusEl = document.getElementById('status');
-const filterGroup = document.getElementById('filterGroup');
-const downloadGroup = document.getElementById('downloadGroup');
+const resultTools = document.getElementById('resultTools');
+const filterSeg = document.getElementById('filterSeg');
+const rotL = document.getElementById('rotL');
+const rotR = document.getElementById('rotR');
+const rotFine = document.getElementById('rotFine');
+const rotFineVal = document.getElementById('rotFineVal');
+const savePhotoBtn = document.getElementById('savePhotoBtn');
 const downloadPngBtn = document.getElementById('downloadPngBtn');
 const downloadJpgBtn = document.getElementById('downloadJpgBtn');
 
@@ -32,7 +37,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = '2026-06-14 v13';
+const BUILD = '2026-06-14 v14';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -51,6 +56,11 @@ const state = {
   loadToken: 0,      // 画像入れ替え検出用トークン（古い自動検出の適用を防ぐ）
   userAdjusted: false, // ユーザーが頂点を手動調整したか（自動検出の上書き抑止）
   filter: 'color',   // 仕上げフィルタ
+  rotBase: 0,        // 90°単位の回転
+  rotFine: 0,        // 微調整（度）
+  filteredCanvas: null, // フィルタ適用後（回転前）のキャッシュ
+  filteredKey: '',   // キャッシュ鍵（warpId + filter）
+  warpId: 0,         // 補正実行ごとに増える
 };
 
 // ---- ステータス表示ユーティリティ ----
@@ -126,11 +136,11 @@ async function loadImageFile(file) {
   // 前回の結果を解放し、結果パネルをリセット
   state.warpedCanvas = null;
   state.baseImageData = null;
+  state.filteredCanvas = null;
   dstCtx.clearRect(0, 0, dstCanvas.width, dstCanvas.height);
   dstCanvas.width = 0; dstCanvas.height = 0;
   dstPlaceholder.hidden = false;
-  filterGroup.hidden = true;
-  downloadGroup.hidden = true;
+  resultTools.hidden = true;
 
   renderSource();
 
@@ -798,15 +808,18 @@ async function runWarp() {
     if (!result) { setStatus('error', '補正に失敗しました（頂点の配置をご確認ください）'); return; }
 
     state.warpedCanvas = result;
-    state.baseImageData = null; // フィルタ用キャッシュを無効化
+    state.baseImageData = null;     // フィルタ用キャッシュを無効化
+    state.filteredCanvas = null;
+    state.warpId++;
+    state.rotBase = 0; state.rotFine = 0; // 回転をリセット
+    if (rotFine) { rotFine.value = '0'; rotFineVal.textContent = '0°'; }
     renderResult();
 
     dstPlaceholder.hidden = true;
-    filterGroup.hidden = false;
-    downloadGroup.hidden = false;
+    resultTools.hidden = false;
     setStatus('done', `補正完了（${result.width}×${result.height}px）`);
-    // モバイルでは結果が画面外（下）に出るため、結果へスクロールして見せる
-    try { dstCanvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
+    // モバイルでは結果が画面外（下）に出るため、結果ツールへスクロールして見せる
+    try { resultTools.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (_) {}
   } catch (e) {
     console.error(e);
     setStatus('error', '補正処理でエラーが発生しました');
@@ -827,14 +840,18 @@ function getBaseImageData() {
   return state.baseImageData;
 }
 
-function renderResult() {
-  if (!state.warpedCanvas) return;
-  const w = state.warpedCanvas.width, h = state.warpedCanvas.height;
-  dstCanvas.width = w; dstCanvas.height = h;
+// フィルタ適用後（回転前）のキャンバスを返す（キャッシュ付き）
+function buildFilteredCanvas() {
+  const key = state.warpId + ':' + state.filter;
+  if (state.filteredCanvas && state.filteredKey === key) return state.filteredCanvas;
+
+  const srcC = state.warpedCanvas;
+  const w = srcC.width, h = srcC.height;
 
   if (state.filter === 'color') {
-    dstCtx.drawImage(state.warpedCanvas, 0, 0);
-    return;
+    state.filteredCanvas = srcC;       // そのまま
+    state.filteredKey = key;
+    return srcC;
   }
 
   const base = getBaseImageData();
@@ -846,7 +863,7 @@ function renderResult() {
     gray[i] = 0.299 * src[j] + 0.587 * src[j + 1] + 0.114 * src[j + 2];
   }
 
-  const out = dstCtx.createImageData(w, h);
+  const out = new ImageData(w, h);
   const o = out.data;
 
   if (state.filter === 'gray') {
@@ -854,38 +871,70 @@ function renderResult() {
       const v = gray[i] | 0, j = i * 4;
       o[j] = o[j + 1] = o[j + 2] = v; o[j + 3] = 255;
     }
-    dstCtx.putImageData(out, 0, 0);
-    return;
+  } else {
+    // 白黒2値化: 積分画像で各画素の周辺平均としきい値比較（適応的）
+    const integ = new Float64Array((w + 1) * (h + 1));
+    for (let y = 0; y < h; y++) {
+      let rowSum = 0;
+      for (let x = 0; x < w; x++) {
+        rowSum += gray[y * w + x];
+        integ[(y + 1) * (w + 1) + (x + 1)] = integ[y * (w + 1) + (x + 1)] + rowSum;
+      }
+    }
+    const rad = Math.max(8, Math.round(Math.min(w, h) * 0.02));
+    const C = 10;
+    for (let y = 0; y < h; y++) {
+      const y0 = Math.max(0, y - rad), y1 = Math.min(h - 1, y + rad);
+      for (let x = 0; x < w; x++) {
+        const x0 = Math.max(0, x - rad), x1 = Math.min(w - 1, x + rad);
+        const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+        const sum =
+          integ[(y1 + 1) * (w + 1) + (x1 + 1)] -
+          integ[(y0) * (w + 1) + (x1 + 1)] -
+          integ[(y1 + 1) * (w + 1) + (x0)] +
+          integ[(y0) * (w + 1) + (x0)];
+        const mean = sum / area;
+        const i = y * w + x, j = i * 4;
+        const v = gray[i] > (mean - C) ? 255 : 0;
+        o[j] = o[j + 1] = o[j + 2] = v; o[j + 3] = 255;
+      }
+    }
   }
 
-  // 白黒2値化: 積分画像で各画素の周辺平均としきい値比較（適応的）
-  const integ = new Float64Array((w + 1) * (h + 1));
-  for (let y = 0; y < h; y++) {
-    let rowSum = 0;
-    for (let x = 0; x < w; x++) {
-      rowSum += gray[y * w + x];
-      integ[(y + 1) * (w + 1) + (x + 1)] = integ[y * (w + 1) + (x + 1)] + rowSum;
-    }
-  }
-  const rad = Math.max(8, Math.round(Math.min(w, h) * 0.02)); // 窓半径
-  const C = 10; // しきい値オフセット
-  for (let y = 0; y < h; y++) {
-    const y0 = Math.max(0, y - rad), y1 = Math.min(h - 1, y + rad);
-    for (let x = 0; x < w; x++) {
-      const x0 = Math.max(0, x - rad), x1 = Math.min(w - 1, x + rad);
-      const area = (x1 - x0 + 1) * (y1 - y0 + 1);
-      const sum =
-        integ[(y1 + 1) * (w + 1) + (x1 + 1)] -
-        integ[(y0) * (w + 1) + (x1 + 1)] -
-        integ[(y1 + 1) * (w + 1) + (x0)] +
-        integ[(y0) * (w + 1) + (x0)];
-      const mean = sum / area;
-      const i = y * w + x, j = i * 4;
-      const v = gray[i] > (mean - C) ? 255 : 0;
-      o[j] = o[j + 1] = o[j + 2] = v; o[j + 3] = 255;
-    }
-  }
-  dstCtx.putImageData(out, 0, 0);
+  const fc = document.createElement('canvas');
+  fc.width = w; fc.height = h;
+  fc.getContext('2d').putImageData(out, 0, 0);
+  state.filteredCanvas = fc;
+  state.filteredKey = key;
+  return fc;
+}
+
+// 任意角度で回転（白背景・はみ出しを含む外接矩形サイズ）
+function rotateCanvas(srcC, deg) {
+  const d = ((deg % 360) + 360) % 360;
+  if (d === 0) return srcC;
+  const rad = d * Math.PI / 180;
+  const s = Math.abs(Math.sin(rad)), c = Math.abs(Math.cos(rad));
+  const w = srcC.width, h = srcC.height;
+  const nw = Math.round(w * c + h * s), nh = Math.round(w * s + h * c);
+  const out = document.createElement('canvas');
+  out.width = nw; out.height = nh;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, nw, nh);
+  ctx.translate(nw / 2, nh / 2);
+  ctx.rotate(rad);
+  ctx.drawImage(srcC, -w / 2, -h / 2);
+  return out;
+}
+
+function renderResult() {
+  if (!state.warpedCanvas) return;
+  const filtered = buildFilteredCanvas();
+  const final = rotateCanvas(filtered, state.rotBase + state.rotFine);
+  dstCanvas.width = final.width;
+  dstCanvas.height = final.height;
+  dstCtx.drawImage(final, 0, 0);
 }
 
 warpBtn.addEventListener('click', () => { runWarp(); });
@@ -1051,25 +1100,44 @@ function animatePoints(target) {
 }
 
 /* ============================================================
- * 仕上げフィルタ切り替え（5）＋ダウンロード
+ * 仕上げフィルタ / 回転 / 保存（結果パネル内ツール）
  * ============================================================ */
-filterGroup.querySelectorAll('.seg-btn').forEach((btn) => {
+filterSeg.querySelectorAll('.seg-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     if (!state.warpedCanvas) return;
-    filterGroup.querySelectorAll('.seg-btn').forEach((b) => b.classList.remove('is-active'));
+    filterSeg.querySelectorAll('.seg-btn').forEach((b) => b.classList.remove('is-active'));
     btn.classList.add('is-active');
     state.filter = btn.dataset.filter;
     renderResult();
   });
 });
 
+// 回転（90°単位＋微調整）
+rotL.addEventListener('click', () => { if (!state.warpedCanvas) return; state.rotBase -= 90; renderResult(); });
+rotR.addEventListener('click', () => { if (!state.warpedCanvas) return; state.rotBase += 90; renderResult(); });
+rotFine.addEventListener('input', () => {
+  if (!state.warpedCanvas) return;
+  state.rotFine = parseFloat(rotFine.value) || 0;
+  rotFineVal.textContent = state.rotFine + '°';
+  renderResult();
+});
+
+// 結果を Blob 化
+function resultBlob(mime, quality) {
+  return new Promise((resolve) => dstCanvas.toBlob((b) => resolve(b), mime, quality));
+}
+
+function tsName(ext) {
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  return `scan-p_${ts}.${ext}`;
+}
+
 function downloadResult(mime, ext, quality) {
   if (!state.warpedCanvas) return;
   const url = dstCanvas.toDataURL(mime, quality);
   const a = document.createElement('a');
-  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   a.href = url;
-  a.download = `scan-p_${ts}.${ext}`;
+  a.download = tsName(ext);
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1077,6 +1145,29 @@ function downloadResult(mime, ext, quality) {
 
 downloadPngBtn.addEventListener('click', () => downloadResult('image/png', 'png'));
 downloadJpgBtn.addEventListener('click', () => downloadResult('image/jpeg', 'jpg', 0.92));
+
+// 写真アプリへ保存（iOS は共有シート → 画像を保存）。非対応時は DL にフォールバック
+savePhotoBtn.addEventListener('click', async () => {
+  if (!state.warpedCanvas) return;
+  try {
+    const blob = await resultBlob('image/jpeg', 0.95);
+    if (!blob) throw new Error('blob 生成に失敗');
+    const file = new File([blob], tsName('jpg'), { type: 'image/jpeg' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'scan-P' });
+      setStatus('done', '共有メニューから「画像を保存」で写真に保存できます');
+    } else {
+      // 共有不可（PC など）→ ダウンロード
+      downloadResult('image/jpeg', 'jpg', 0.95);
+      setStatus('info', 'この環境では共有に未対応のため、ダウンロードしました');
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return; // ユーザーがキャンセル
+    console.warn('[scan-P] share failed', e);
+    downloadResult('image/jpeg', 'jpg', 0.95);
+    setStatus('info', '共有できなかったため、ダウンロードしました');
+  }
+});
 
 // 読み取り専用デバッグフック（テスト用・副作用なし）
 window.__dbgPoints = () => state.points.map((p) => ({ x: p.x, y: p.y }));

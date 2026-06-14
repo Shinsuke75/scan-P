@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>scan-P｜ドキュメントスキャナ（台形補正）</title>
-  <link rel="stylesheet" href="style.css?v=13" />
+  <link rel="stylesheet" href="style.css?v=14" />
 </head>
 <body>
   <header class="app-header">
@@ -23,20 +23,6 @@
       <button id="warpBtn" class="btn btn-accent" disabled>✂️ 補正実行</button>
 
       <button id="autoBtn" class="btn btn-ghost" hidden>✨ 自動で枠検出（任意）</button>
-
-      <div class="filter-group" id="filterGroup" hidden>
-        <span class="filter-label">仕上げ:</span>
-        <div class="segmented">
-          <button class="seg-btn is-active" data-filter="color">カラー</button>
-          <button class="seg-btn" data-filter="gray">グレー</button>
-          <button class="seg-btn" data-filter="bw">白黒</button>
-        </div>
-      </div>
-
-      <div class="download-group" id="downloadGroup" hidden>
-        <button id="downloadPngBtn" class="btn btn-ghost">⬇️ PNG</button>
-        <button id="downloadJpgBtn" class="btn btn-ghost">⬇️ JPEG</button>
-      </div>
     </section>
 
     <!-- ステータス -->
@@ -57,6 +43,31 @@
 
       <div class="panel card">
         <h2 class="panel-title">補正結果</h2>
+
+        <!-- 結果のすぐ近くに後処理ツール（スマホで戻らなくて済む） -->
+        <div class="result-tools" id="resultTools" hidden>
+          <div class="tool-row">
+            <span class="tool-label">仕上げ</span>
+            <div class="segmented" id="filterSeg">
+              <button class="seg-btn is-active" data-filter="color">カラー</button>
+              <button class="seg-btn" data-filter="gray">グレー</button>
+              <button class="seg-btn" data-filter="bw">白黒</button>
+            </div>
+          </div>
+          <div class="tool-row">
+            <span class="tool-label">回転</span>
+            <button id="rotL" class="btn btn-ghost btn-sm">⟲ 90°</button>
+            <button id="rotR" class="btn btn-ghost btn-sm">⟳ 90°</button>
+            <input id="rotFine" type="range" min="-15" max="15" step="1" value="0" aria-label="微調整" />
+            <span id="rotFineVal" class="rot-val">0°</span>
+          </div>
+          <div class="tool-row">
+            <button id="savePhotoBtn" class="btn btn-primary">📷 写真に保存</button>
+            <button id="downloadPngBtn" class="btn btn-ghost btn-sm">⬇️ PNG</button>
+            <button id="downloadJpgBtn" class="btn btn-ghost btn-sm">⬇️ JPEG</button>
+          </div>
+        </div>
+
         <div class="canvas-wrap result-wrap" id="dstWrap">
           <canvas id="dstCanvas"></canvas>
           <p class="placeholder" id="dstPlaceholder">「補正実行」を押すと結果が表示されます</p>
@@ -70,6 +81,6 @@
     <p class="build-stamp" id="buildStamp"></p>
   </footer>
 
-  <script src="script.js?v=13"></script>
+  <script src="script.js?v=14"></script>
 </body>
 </html>
