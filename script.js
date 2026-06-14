@@ -37,7 +37,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = '2026-06-14 v16';
+const BUILD = '2026-06-14 v17';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -415,11 +415,19 @@ function showLoupe(ptView) {
   loupeCtx.arc(px / 2, px / 2, px / 2, 0, Math.PI * 2);
   loupeCtx.closePath();
   loupeCtx.clip();
-  loupeCtx.fillStyle = '#fff';
+  // 背景は薄いグレー（＝画像の外。真っ白で「消えた」と誤解しないように）
+  loupeCtx.fillStyle = '#e2e8f0';
   loupeCtx.fillRect(0, 0, px, px);
-  // 元解像度から拡大して描く（クリスプ）
+  // 元解像度から拡大して描く（クリスプ）。画像外は描かれずグレーが残る
   loupeCtx.imageSmoothingEnabled = true;
   loupeCtx.drawImage(state.bitmap, sxN, syN, winNative, winNative, 0, 0, px, px);
+  // 画像の縁（境界線）をルーペ内に描く＝「ここが画像の端」が分かる
+  const sc = px / winNative; // ルーペpx / 元画像px
+  const bx = (0 - sxN) * sc, by = (0 - syN) * sc;
+  const bw = state.nativeW * sc, bh = state.nativeH * sc;
+  loupeCtx.strokeStyle = 'rgba(37,99,235,0.9)';
+  loupeCtx.lineWidth = 2 * dpr;
+  loupeCtx.strokeRect(bx, by, bw, bh);
   // 十字＋中心リング
   loupeCtx.strokeStyle = 'rgba(234,88,12,0.9)';
   loupeCtx.lineWidth = 2 * dpr;
