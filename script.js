@@ -143,32 +143,184 @@ function renderSource() {
   srcPlaceholder.hidden = true;
 }
 
-// オーバーレイ（頂点・枠線）の描画 — Stage 3 で本実装
+// オーバーレイ（頂点・枠線）の描画
+const POINT_RADIUS = 9;          // 見た目の頂点半径（表示座標 px）
 function drawOverlay() {
   overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
   if (state.points.length !== 4) return;
 
   const p = state.points;
-  // 枠線
-  overlayCtx.lineWidth = 2;
-  overlayCtx.strokeStyle = 'rgba(37,99,235,0.9)';
+
+  // 半透明の塗り＋枠線
   overlayCtx.beginPath();
   overlayCtx.moveTo(p[0].x, p[0].y);
   for (let i = 1; i < 4; i++) overlayCtx.lineTo(p[i].x, p[i].y);
   overlayCtx.closePath();
+  overlayCtx.fillStyle = 'rgba(37,99,235,0.10)';
+  overlayCtx.fill();
+  overlayCtx.lineWidth = 2;
+  overlayCtx.strokeStyle = 'rgba(37,99,235,0.95)';
   overlayCtx.stroke();
 
   // 頂点
-  for (const pt of p) {
+  for (let i = 0; i < 4; i++) {
+    const pt = p[i];
+    const active = i === activeIdx;
+    const r = POINT_RADIUS * (active ? 1.35 : 1);
     overlayCtx.beginPath();
-    overlayCtx.arc(pt.x, pt.y, 9, 0, Math.PI * 2);
-    overlayCtx.fillStyle = '#f59e0b';
+    overlayCtx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+    overlayCtx.fillStyle = active ? '#ea580c' : '#f59e0b';
     overlayCtx.fill();
-    overlayCtx.lineWidth = 2;
+    overlayCtx.lineWidth = 2.5;
     overlayCtx.strokeStyle = '#fff';
     overlayCtx.stroke();
   }
 }
+
+/* ============================================================
+ * 頂点ドラッグ（D: Pointer Events に一本化）
+ *  - setPointerCapture でキャンバス外へ出ても追従
+ *  - touch-action:none + preventDefault でスクロール/ズーム抑止
+ *  - 当たり判定は見た目より大きめ（指で押せる半径）
+ * ============================================================ */
+const HIT_RADIUS = 26;   // 当たり判定半径（CSS px 基準）
+let activeIdx = -1;
+
+// クライアント座標 → キャンバス（表示）座標
+function toCanvasPos(ev) {
+  const rect = overlayCanvas.getBoundingClientRect();
+  const sx = overlayCanvas.width / rect.width;
+  const sy = overlayCanvas.height / rect.height;
+  return {
+    x: (ev.clientX - rect.left) * sx,
+    y: (ev.clientY - rect.top) * sy,
+    sx, sy, rect,
+  };
+}
+
+// 当たった頂点 index を返す（なければ -1）
+function hitTest(pos) {
+  const rect = overlayCanvas.getBoundingClientRect();
+  const sx = overlayCanvas.width / rect.width; // CSS→canvas 倍率
+  const hit = HIT_RADIUS * sx;                 // 当たり判定をキャンバス座標へ
+  let best = -1, bestD = hit * hit;
+  for (let i = 0; i < state.points.length; i++) {
+    const dx = state.points[i].x - pos.x;
+    const dy = state.points[i].y - pos.y;
+    const d = dx * dx + dy * dy;
+    if (d <= bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+overlayCanvas.addEventListener('pointerdown', (ev) => {
+  if (state.points.length !== 4) return;
+  const pos = toCanvasPos(ev);
+  const idx = hitTest(pos);
+  if (idx === -1) return;
+  activeIdx = idx;
+  overlayCanvas.setPointerCapture(ev.pointerId); // 外へ出ても追従
+  overlayCanvas.style.cursor = 'grabbing';
+  // つかんだ点をそのままポインタ位置へ
+  state.points[idx].x = clamp(pos.x, 0, overlayCanvas.width);
+  state.points[idx].y = clamp(pos.y, 0, overlayCanvas.height);
+  drawOverlay();
+  showLoupe(state.points[idx]);
+  ev.preventDefault();
+});
+
+overlayCanvas.addEventListener('pointermove', (ev) => {
+  if (activeIdx === -1) return;
+  ev.preventDefault(); // ドラッグ中のスクロール/ピンチを抑止
+  const pos = toCanvasPos(ev);
+  state.points[activeIdx].x = clamp(pos.x, 0, overlayCanvas.width);
+  state.points[activeIdx].y = clamp(pos.y, 0, overlayCanvas.height);
+  drawOverlay();
+  showLoupe(state.points[activeIdx]);
+});
+
+function endDrag(ev) {
+  if (activeIdx === -1) return;
+  activeIdx = -1;
+  overlayCanvas.style.cursor = 'grab';
+  hideLoupe();
+  drawOverlay();
+  try { overlayCanvas.releasePointerCapture(ev.pointerId); } catch (_) {}
+}
+overlayCanvas.addEventListener('pointerup', endDrag);
+overlayCanvas.addEventListener('pointercancel', endDrag);
+
+function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/* ---- ルーペ（拡大鏡）---- */
+const LOUPE_SIZE = 130;          // CSS 上のサイズ（style.css と一致）
+const LOUPE_ZOOM = 2.6;          // 拡大率（ビュー基準）
+const loupeCtx = loupe.getContext('2d');
+
+function showLoupe(ptView) {
+  if (!state.bitmap) return;
+  const dpr = window.devicePixelRatio || 1;
+  if (loupe.width !== LOUPE_SIZE * dpr) {
+    loupe.width = LOUPE_SIZE * dpr;
+    loupe.height = LOUPE_SIZE * dpr;
+  }
+  loupe.hidden = false;
+
+  const px = loupe.width;        // 内部ピクセル
+  // ビュー上で切り出す窓（px）→ 元画像座標へ
+  const winView = LOUPE_SIZE / LOUPE_ZOOM;
+  const winNative = winView / state.scale;
+  const cxNative = ptView.x / state.scale;
+  const cyNative = ptView.y / state.scale;
+  let sxN = cxNative - winNative / 2;
+  let syN = cyNative - winNative / 2;
+
+  loupeCtx.save();
+  loupeCtx.clearRect(0, 0, px, px);
+  // 円形クリップ
+  loupeCtx.beginPath();
+  loupeCtx.arc(px / 2, px / 2, px / 2, 0, Math.PI * 2);
+  loupeCtx.closePath();
+  loupeCtx.clip();
+  loupeCtx.fillStyle = '#fff';
+  loupeCtx.fillRect(0, 0, px, px);
+  // 元解像度から拡大して描く（クリスプ）
+  loupeCtx.imageSmoothingEnabled = true;
+  loupeCtx.drawImage(state.bitmap, sxN, syN, winNative, winNative, 0, 0, px, px);
+  // 十字＋中心リング
+  loupeCtx.strokeStyle = 'rgba(234,88,12,0.9)';
+  loupeCtx.lineWidth = 2 * dpr;
+  loupeCtx.beginPath();
+  loupeCtx.moveTo(px / 2, px * 0.3); loupeCtx.lineTo(px / 2, px * 0.7);
+  loupeCtx.moveTo(px * 0.3, px / 2); loupeCtx.lineTo(px * 0.7, px / 2);
+  loupeCtx.stroke();
+  loupeCtx.beginPath();
+  loupeCtx.arc(px / 2, px / 2, 7 * dpr, 0, Math.PI * 2);
+  loupeCtx.stroke();
+  loupeCtx.restore();
+
+  positionLoupe(ptView);
+}
+
+// ルーペを指で隠れない位置（基本は上、上端付近なら下）へ
+function positionLoupe(ptView) {
+  const oRect = overlayCanvas.getBoundingClientRect();
+  const wRect = srcWrap.getBoundingClientRect();
+  const cssScaleX = oRect.width / overlayCanvas.width;
+  const cssScaleY = oRect.height / overlayCanvas.height;
+  const cx = (oRect.left - wRect.left) + ptView.x * cssScaleX;
+  const cy = (oRect.top - wRect.top) + ptView.y * cssScaleY;
+
+  let left = cx - LOUPE_SIZE / 2;
+  let top = cy - LOUPE_SIZE - 24;        // 既定は指の上
+  if (top < 4) top = cy + 24;            // 上端付近なら下に出す
+  left = clamp(left, 4, srcWrap.clientWidth - LOUPE_SIZE - 4);
+  top = clamp(top, 4, srcWrap.clientHeight - LOUPE_SIZE - 4);
+  loupe.style.left = left + 'px';
+  loupe.style.top = top + 'px';
+}
+
+function hideLoupe() { loupe.hidden = true; }
 
 // ---- イベント ----
 fileInput.addEventListener('change', (e) => {
@@ -194,4 +346,4 @@ window.addEventListener('resize', () => {
   }, 150);
 });
 
-console.log('[scan-P] ready (stage 2: upload & display)');
+console.log('[scan-P] ready (stage 3: vertex drag + loupe)');
