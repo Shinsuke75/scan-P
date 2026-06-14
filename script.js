@@ -62,6 +62,20 @@ function setStatus(kind, message, withSpinner = false) {
     '<span>' + message + '</span>';
 }
 
+// 端末側の例外を画面に表示（モバイルはコンソールが見えないため）
+function escapeHtml(s) {
+  return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+window.addEventListener('error', (e) => {
+  const msg = e && (e.message || (e.error && e.error.message)) || '不明なエラー';
+  setStatus('error', '⚠ ' + escapeHtml(msg));
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e && e.reason;
+  const msg = (r && (r.message || r)) || '不明なエラー';
+  setStatus('error', '⚠ ' + escapeHtml(msg));
+});
+
 /* ============================================================
  * 表示サイズの計算（A: 表示解像度と処理解像度の分離）
  *  - 元解像度はそのまま保持
@@ -520,8 +534,10 @@ let glState = null; // { canvas, gl, prog, uH, aPos, uTex, buf }
 function initGL() {
   if (glState) return glState;
   const canvas = document.createElement('canvas');
-  const gl = canvas.getContext('webgl', { premultipliedAlpha: false }) ||
-             canvas.getContext('experimental-webgl');
+  const gl = canvas.getContext('webgl', {
+    premultipliedAlpha: false,
+    preserveDrawingBuffer: true,   // drawImage で確実に取り出すため
+  }) || canvas.getContext('experimental-webgl', { preserveDrawingBuffer: true });
   if (!gl) return null;
 
   const vsSrc =
@@ -632,20 +648,20 @@ function warpWithWebGL(orderedNative, outW, outH) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
-  // テクスチャ上限を超える巨大写真は、テクスチャ用にのみ縮小（座標は正規化）
-  let texSrc = state.bitmap;
+  // iOS Safari は ImageBitmap の直接アップロードで空テクスチャになることが
+  // あるため、必ず 2D キャンバスに描いてからアップロードする。
   const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096;
   const longSide = Math.max(state.nativeW, state.nativeH);
+  let tw = state.nativeW, th = state.nativeH;
   if (longSide > maxTex) {
     const s = maxTex / longSide;
-    const tw = Math.max(1, Math.round(state.nativeW * s));
-    const th = Math.max(1, Math.round(state.nativeH * s));
-    const tc = document.createElement('canvas');
-    tc.width = tw; tc.height = th;
-    tc.getContext('2d').drawImage(state.bitmap, 0, 0, tw, th);
-    texSrc = tc;
+    tw = Math.max(1, Math.round(state.nativeW * s));
+    th = Math.max(1, Math.round(state.nativeH * s));
   }
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texSrc);
+  const tc = document.createElement('canvas');
+  tc.width = tw; tc.height = th;
+  tc.getContext('2d').drawImage(state.bitmap, 0, 0, tw, th);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tc);
 
   // 出力正規化(0..1) → 元テクスチャ座標(0..1) のホモグラフィ
   const from = [[0, 0], [1, 0], [1, 1], [0, 1]];
@@ -734,6 +750,22 @@ function warpWithJS(orderedNative, outW, outH) {
   return out;
 }
 
+// 結果がほぼ真っ白か（WebGL 失敗検出用）。数点をサンプリング。
+function isMostlyBlank(canvas) {
+  try {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const pts = [[w >> 1, h >> 1], [w >> 2, h >> 2], [(w * 3) >> 2, (h * 3) >> 2],
+                 [w >> 2, (h * 3) >> 2], [(w * 3) >> 2, h >> 2]];
+    let white = 0;
+    for (const [x, y] of pts) {
+      const d = ctx.getImageData(x, y, 1, 1).data;
+      if (d[0] > 250 && d[1] > 250 && d[2] > 250) white++;
+    }
+    return white === pts.length;
+  } catch (_) { return false; }
+}
+
 async function runWarp() {
   if (!state.bitmap || state.points.length !== 4) return;
   warpBtn.disabled = true;
@@ -747,10 +779,16 @@ async function runWarp() {
     const { outW, outH } = computeOutputSize(ordered);
 
     let result = warpWithWebGL(ordered, outW, outH);
-    if (!result) {
+    // WebGL が空（真っ白）を返した場合も CPU フォールバックへ
+    if (!result || isMostlyBlank(result)) {
       setStatus('work', '台形補正を実行中…（CPU フォールバック）', true);
       await new Promise((r) => requestAnimationFrame(() => r()));
-      result = warpWithJS(ordered, outW, outH);
+      // 純 JS は重いので、フォールバック時は解像度を抑える（フリーズ防止）
+      const JS_MAX = 1800;
+      let jw = outW, jh = outH;
+      const lng = Math.max(jw, jh);
+      if (lng > JS_MAX) { const s = JS_MAX / lng; jw = Math.round(jw * s); jh = Math.round(jh * s); }
+      result = warpWithJS(ordered, jw, jh);
     }
     if (!result) { setStatus('error', '補正に失敗しました（頂点の配置をご確認ください）'); return; }
 
@@ -761,7 +799,9 @@ async function runWarp() {
     dstPlaceholder.hidden = true;
     filterGroup.hidden = false;
     downloadGroup.hidden = false;
-    setStatus('done', `補正完了（${outW}×${outH}px）`);
+    setStatus('done', `補正完了（${result.width}×${result.height}px）`);
+    // モバイルでは結果が画面外（下）に出るため、結果へスクロールして見せる
+    try { dstCanvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
   } catch (e) {
     console.error(e);
     setStatus('error', '補正処理でエラーが発生しました');
