@@ -32,7 +32,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = '2026-06-14 v11';
+const BUILD = '2026-06-14 v12';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -44,6 +44,7 @@ const state = {
   viewW: 0,          // 表示キャンバスの幅（px）
   viewH: 0,          // 表示キャンバスの高さ（px）
   scale: 1,          // view / native（表示→元の変換は 1/scale）
+  padX: 0, padY: 0,  // 画像の周囲に設ける余白（画像外の仮想点用）
   points: [],        // 表示座標系の頂点 [{x,y} x4]（TL,TR,BR,BL の並びを意図）
   warpedCanvas: null, // 直近の補正結果（カラー）の 2D キャンバス
   baseImageData: null, // フィルタ再計算用のカラー ImageData キャッシュ
@@ -80,36 +81,18 @@ window.addEventListener('unhandledrejection', (e) => {
   setStatus('error', '⚠ ' + escapeHtml(msg));
 });
 
-/* ============================================================
- * 表示サイズの計算（A: 表示解像度と処理解像度の分離）
- *  - 元解像度はそのまま保持
- *  - コンテナ幅と最大高さに収まる「ビュー」サイズを算出
- * ============================================================ */
-function computeViewSize(nativeW, nativeH) {
-  // コンテナの利用可能幅（パディング考慮で実測）
-  const available = srcWrap.clientWidth || 320;
-  const maxW = Math.max(240, available);
-  // 縦に長い書類でも画面に収まるよう高さ上限も設ける
-  const maxH = Math.max(260, Math.round(window.innerHeight * 0.7));
+// 画像の周囲に設ける余白の割合（画像外の角＝仮想点を置けるように）
+const PAD_FRAC = 0.16;
 
-  let scale = Math.min(maxW / nativeW, maxH / nativeH);
-  // 元画像が小さければ拡大しすぎない（等倍を上限）
-  if (scale > 1) scale = 1;
-
-  const viewW = Math.max(1, Math.round(nativeW * scale));
-  const viewH = Math.max(1, Math.round(nativeH * scale));
-  return { viewW, viewH, scale: viewW / nativeW };
-}
-
-// フォールバックの 4 点（画像の内側 20%）を表示座標で生成
-function makeFallbackPoints(viewW, viewH) {
-  const mx = viewW * 0.2;
-  const my = viewH * 0.2;
+// フォールバックの 4 点（画像の内側 20%）を表示座標（余白込み）で生成
+function makeFallbackPoints() {
+  const { padX, padY, viewW, viewH } = state;
+  const mx = viewW * 0.2, my = viewH * 0.2;
   return [
-    { x: mx, y: my },                 // 左上
-    { x: viewW - mx, y: my },         // 右上
-    { x: viewW - mx, y: viewH - my }, // 右下
-    { x: mx, y: viewH - my },         // 左下
+    { x: padX + mx, y: padY + my },                 // 左上
+    { x: padX + viewW - mx, y: padY + my },         // 右上
+    { x: padX + viewW - mx, y: padY + viewH - my }, // 右下
+    { x: padX + mx, y: padY + viewH - my },         // 左下
   ];
 }
 
@@ -152,7 +135,7 @@ async function loadImageFile(file) {
   renderSource();
 
   // フォールバック 4 点を即座に表示（B: ユーザーを待たせない）
-  state.points = makeFallbackPoints(state.viewW, state.viewH);
+  state.points = makeFallbackPoints();
   drawOverlay();
 
   warpBtn.disabled = false;
@@ -164,20 +147,35 @@ async function loadImageFile(file) {
   // 自動検出は「✨自動で枠検出」ボタンを押したときだけ実行する。
 }
 
-// 元画像を「ビュー」サイズに縮小して表示キャンバスへ描画
+// 元画像を「ビュー」サイズに縮小し、周囲に余白を付けて表示キャンバスへ描画
 function renderSource() {
-  const { viewW, viewH, scale } = computeViewSize(state.nativeW, state.nativeH);
-  state.viewW = viewW;
-  state.viewH = viewH;
-  state.scale = scale;
+  const available = srcWrap.clientWidth || 320;
+  const maxCanvasW = Math.max(240, available);
+  const maxCanvasH = Math.max(260, Math.round(window.innerHeight * 0.7));
+  const f = 1 + 2 * PAD_FRAC; // キャンバス全体は画像の f 倍
 
-  srcCanvas.width = viewW;
-  srcCanvas.height = viewH;
-  overlayCanvas.width = viewW;
-  overlayCanvas.height = viewH;
+  let scale = Math.min((maxCanvasW / f) / state.nativeW, (maxCanvasH / f) / state.nativeH);
+  if (scale > 1) scale = 1; // 拡大しすぎない
 
-  srcCtx.clearRect(0, 0, viewW, viewH);
-  srcCtx.drawImage(state.bitmap, 0, 0, viewW, viewH);
+  const viewW = Math.max(1, Math.round(state.nativeW * scale));
+  const viewH = Math.max(1, Math.round(state.nativeH * scale));
+  const padX = Math.round(viewW * PAD_FRAC);
+  const padY = Math.round(viewH * PAD_FRAC);
+
+  state.viewW = viewW; state.viewH = viewH;
+  state.scale = viewW / state.nativeW;
+  state.padX = padX; state.padY = padY;
+
+  const cw = viewW + 2 * padX, ch = viewH + 2 * padY;
+  srcCanvas.width = cw; srcCanvas.height = ch;
+  overlayCanvas.width = cw; overlayCanvas.height = ch;
+
+  srcCtx.clearRect(0, 0, cw, ch);
+  // 画像領域の外（余白）が分かるよう、画像の枠を薄く描く
+  srcCtx.drawImage(state.bitmap, padX, padY, viewW, viewH);
+  srcCtx.strokeStyle = 'rgba(100,116,139,0.5)';
+  srcCtx.lineWidth = 1;
+  srcCtx.strokeRect(padX + 0.5, padY + 0.5, viewW - 1, viewH - 1);
 
   srcPlaceholder.hidden = true;
 }
@@ -201,6 +199,25 @@ function drawOverlay() {
   overlayCtx.strokeStyle = 'rgba(37,99,235,0.95)';
   overlayCtx.stroke();
 
+  // 辺の中央ハンドル（ドラッグで辺を平行移動）
+  for (let i = 0; i < 4; i++) {
+    const a = p[i], b = p[(i + 1) % 4];
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    const active = i === activeEdge;
+    const s = active ? 9 : 7;
+    overlayCtx.save();
+    overlayCtx.translate(mx, my);
+    overlayCtx.rotate(Math.PI / 4); // ひし形
+    overlayCtx.beginPath();
+    overlayCtx.rect(-s, -s, s * 2, s * 2);
+    overlayCtx.fillStyle = active ? '#2563eb' : 'rgba(37,99,235,0.85)';
+    overlayCtx.fill();
+    overlayCtx.lineWidth = 2;
+    overlayCtx.strokeStyle = '#fff';
+    overlayCtx.stroke();
+    overlayCtx.restore();
+  }
+
   // 頂点
   for (let i = 0; i < 4; i++) {
     const pt = p[i];
@@ -223,7 +240,9 @@ function drawOverlay() {
  *  - 当たり判定は見た目より大きめ（指で押せる半径）
  * ============================================================ */
 const HIT_RADIUS = 26;   // 当たり判定半径（CSS px 基準）
-let activeIdx = -1;
+let activeIdx = -1;      // ドラッグ中の頂点 index（-1=なし）
+let activeEdge = -1;     // ドラッグ中の辺 index（-1=なし）
+let lastPos = null;      // 辺ドラッグ用の前回ポインタ位置
 
 // クライアント座標 → キャンバス（表示）座標
 function toCanvasPos(ev) {
@@ -252,33 +271,72 @@ function hitTest(pos) {
   return best;
 }
 
+// 点 pos と辺の中央ハンドルの当たり判定（辺 index か -1）
+function hitTestEdge(pos) {
+  const rect = overlayCanvas.getBoundingClientRect();
+  const sx = overlayCanvas.width / rect.width;
+  const sy = overlayCanvas.height / rect.height;
+  let best = -1, bestD = (HIT_RADIUS * HIT_RADIUS);
+  for (let i = 0; i < 4; i++) {
+    const a = state.points[i], b = state.points[(i + 1) % 4];
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    const dx = (mx - pos.x) / sx, dy = (my - pos.y) / sy;
+    const d = dx * dx + dy * dy;
+    if (d <= bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
 overlayCanvas.addEventListener('pointerdown', (ev) => {
   if (state.points.length !== 4) return;
   const pos = toCanvasPos(ev);
+  // まず頂点、なければ辺の中央ハンドル
   const idx = hitTest(pos);
-  if (idx === -1) return;
-  activeIdx = idx;
+  if (idx !== -1) {
+    activeIdx = idx;
+  } else {
+    const e = hitTestEdge(pos);
+    if (e === -1) return;
+    activeEdge = e;
+    lastPos = { x: pos.x, y: pos.y };
+  }
   state.userAdjusted = true; // 以後、自動検出結果で上書きしない
   overlayCanvas.setPointerCapture(ev.pointerId); // 外へ出ても追従
   overlayCanvas.style.cursor = 'grabbing';
   drawOverlay();
-  showLoupe(state.points[idx]);
+  if (activeIdx !== -1) showLoupe(state.points[activeIdx]);
   ev.preventDefault();
 });
 
 overlayCanvas.addEventListener('pointermove', (ev) => {
-  if (activeIdx === -1) return;
+  if (activeIdx === -1 && activeEdge === -1) return;
   ev.preventDefault(); // ドラッグ中のスクロール/ピンチを抑止
   const pos = toCanvasPos(ev);
-  state.points[activeIdx].x = clamp(pos.x, 0, overlayCanvas.width);
-  state.points[activeIdx].y = clamp(pos.y, 0, overlayCanvas.height);
-  drawOverlay();
-  showLoupe(state.points[activeIdx]);
+  if (activeIdx !== -1) {
+    // 頂点ドラッグ（余白内なら画像外＝仮想点も置ける）
+    state.points[activeIdx].x = clamp(pos.x, 0, overlayCanvas.width);
+    state.points[activeIdx].y = clamp(pos.y, 0, overlayCanvas.height);
+    drawOverlay();
+    showLoupe(state.points[activeIdx]);
+  } else {
+    // 辺ドラッグ：その辺の両端を同じ量だけ動かす＝辺を平行移動
+    const dx = pos.x - lastPos.x, dy = pos.y - lastPos.y;
+    const a = state.points[activeEdge], b = state.points[(activeEdge + 1) % 4];
+    a.x = clamp(a.x + dx, 0, overlayCanvas.width);
+    a.y = clamp(a.y + dy, 0, overlayCanvas.height);
+    b.x = clamp(b.x + dx, 0, overlayCanvas.width);
+    b.y = clamp(b.y + dy, 0, overlayCanvas.height);
+    lastPos = { x: pos.x, y: pos.y };
+    drawOverlay();
+    showLoupe({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  }
 });
 
 function endDrag(ev) {
-  if (activeIdx === -1) return;
+  if (activeIdx === -1 && activeEdge === -1) return;
   activeIdx = -1;
+  activeEdge = -1;
+  lastPos = null;
   overlayCanvas.style.cursor = 'grab';
   hideLoupe();
   drawOverlay();
@@ -307,8 +365,9 @@ function showLoupe(ptView) {
   // ビュー上で切り出す窓（px）→ 元画像座標へ
   const winView = LOUPE_SIZE / LOUPE_ZOOM;
   const winNative = winView / state.scale;
-  const cxNative = ptView.x / state.scale;
-  const cyNative = ptView.y / state.scale;
+  // 表示座標（余白込み）→ 元画像座標
+  const cxNative = (ptView.x - state.padX) / state.scale;
+  const cyNative = (ptView.y - state.padY) / state.scale;
   let sxN = cxNative - winNative / 2;
   let syN = cyNative - winNative / 2;
 
@@ -375,10 +434,13 @@ window.addEventListener('resize', () => {
   if (!state.bitmap) return;
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    const prevW = state.viewW, prevH = state.viewH;
-    const ratios = state.points.map((pt) => ({ rx: pt.x / prevW, ry: pt.y / prevH }));
+    // 元画像座標に直してから新しいビューへ再マップ（余白も追従）
+    const nativePts = pointsToNative(state.points);
     renderSource();
-    state.points = ratios.map((r) => ({ x: r.rx * state.viewW, y: r.ry * state.viewH }));
+    state.points = nativePts.map((p) => ({
+      x: p.x * state.scale + state.padX,
+      y: p.y * state.scale + state.padY,
+    }));
     drawOverlay();
   }, 150);
 });
@@ -387,10 +449,13 @@ window.addEventListener('resize', () => {
  * 補正実行（4: 座標変換・並べ替え・出力サイズ算出・clamp・warp）
  * ============================================================ */
 
-// 表示座標の頂点を元画像座標へ変換
+// 表示座標（余白込み）の頂点を元画像座標へ変換
 function pointsToNative(points) {
   const inv = 1 / state.scale;
-  return points.map((p) => ({ x: p.x * inv, y: p.y * inv }));
+  return points.map((p) => ({
+    x: (p.x - state.padX) * inv,
+    y: (p.y - state.padY) * inv,
+  }));
 }
 
 // 4 点を 左上→右上→右下→左下 に正規化（任意順でも破綻しない）
@@ -848,7 +913,10 @@ function startAutoDetect(token) {
       return;
     }
     const ordered = orderCorners(nativePts);
-    const viewPts = ordered.map((p) => ({ x: p.x * state.scale, y: p.y * state.scale }));
+    const viewPts = ordered.map((p) => ({
+      x: p.x * state.scale + state.padX,
+      y: p.y * state.scale + state.padY,
+    }));
     state.userAdjusted = false;
     animatePoints(viewPts);
     setStatus('done', '枠を自動検出しました — 必要なら微調整してください');
