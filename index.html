@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>scan-P｜ドキュメントスキャナ（台形補正）</title>
-  <link rel="stylesheet" href="style.css?v=14" />
+  <link rel="stylesheet" href="style.css?v=15" />
 </head>
 <body>
   <header class="app-header">
@@ -54,12 +54,16 @@
               <button class="seg-btn" data-filter="bw">白黒</button>
             </div>
           </div>
+          <div class="tool-row" id="bwRow" hidden>
+            <span class="tool-label">濃さ</span>
+            <span class="rng-end">薄</span>
+            <input id="bwThresh" type="range" min="-30" max="30" step="1" value="0" aria-label="白黒のしきい値" />
+            <span class="rng-end">濃</span>
+          </div>
           <div class="tool-row">
             <span class="tool-label">回転</span>
             <button id="rotL" class="btn btn-ghost btn-sm">⟲ 90°</button>
             <button id="rotR" class="btn btn-ghost btn-sm">⟳ 90°</button>
-            <input id="rotFine" type="range" min="-15" max="15" step="1" value="0" aria-label="微調整" />
-            <span id="rotFineVal" class="rot-val">0°</span>
           </div>
           <div class="tool-row">
             <button id="savePhotoBtn" class="btn btn-primary">📷 写真に保存</button>
@@ -81,6 +85,6 @@
     <p class="build-stamp" id="buildStamp"></p>
   </footer>
 
-  <script src="script.js?v=14"></script>
+  <script src="script.js?v=15"></script>
 </body>
 </html>

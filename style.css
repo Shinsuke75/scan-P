@@ -250,18 +250,16 @@ body {
   padding: 8px 12px;
   min-height: 38px;
 }
-#rotFine {
+.result-tools input[type="range"] {
   flex: 1;
   min-width: 90px;
   accent-color: var(--primary);
   touch-action: none;
 }
-.rot-val {
+.rng-end {
   font-size: 0.85rem;
-  color: var(--ink);
-  font-weight: 600;
-  min-width: 2.6em;
-  text-align: right;
+  color: var(--muted);
+  font-weight: 700;
 }
 
 #srcCanvas,

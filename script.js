@@ -24,10 +24,10 @@ const dstPlaceholder = document.getElementById('dstPlaceholder');
 const statusEl = document.getElementById('status');
 const resultTools = document.getElementById('resultTools');
 const filterSeg = document.getElementById('filterSeg');
+const bwRow = document.getElementById('bwRow');
+const bwThresh = document.getElementById('bwThresh');
 const rotL = document.getElementById('rotL');
 const rotR = document.getElementById('rotR');
-const rotFine = document.getElementById('rotFine');
-const rotFineVal = document.getElementById('rotFineVal');
 const savePhotoBtn = document.getElementById('savePhotoBtn');
 const downloadPngBtn = document.getElementById('downloadPngBtn');
 const downloadJpgBtn = document.getElementById('downloadJpgBtn');
@@ -37,7 +37,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = '2026-06-14 v14';
+const BUILD = '2026-06-14 v15';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -56,10 +56,10 @@ const state = {
   loadToken: 0,      // 画像入れ替え検出用トークン（古い自動検出の適用を防ぐ）
   userAdjusted: false, // ユーザーが頂点を手動調整したか（自動検出の上書き抑止）
   filter: 'color',   // 仕上げフィルタ
+  bwC: 10,           // 白黒2値化のしきい値オフセット（大=薄, 小=濃）
   rotBase: 0,        // 90°単位の回転
-  rotFine: 0,        // 微調整（度）
   filteredCanvas: null, // フィルタ適用後（回転前）のキャッシュ
-  filteredKey: '',   // キャッシュ鍵（warpId + filter）
+  filteredKey: '',   // キャッシュ鍵（warpId + filter + bwC）
   warpId: 0,         // 補正実行ごとに増える
 };
 
@@ -811,12 +811,12 @@ async function runWarp() {
     state.baseImageData = null;     // フィルタ用キャッシュを無効化
     state.filteredCanvas = null;
     state.warpId++;
-    state.rotBase = 0; state.rotFine = 0; // 回転をリセット
-    if (rotFine) { rotFine.value = '0'; rotFineVal.textContent = '0°'; }
+    state.rotBase = 0; // 回転をリセット
     renderResult();
 
     dstPlaceholder.hidden = true;
     resultTools.hidden = false;
+    bwRow.hidden = state.filter !== 'bw';
     setStatus('done', `補正完了（${result.width}×${result.height}px）`);
     // モバイルでは結果が画面外（下）に出るため、結果ツールへスクロールして見せる
     try { resultTools.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (_) {}
@@ -842,7 +842,7 @@ function getBaseImageData() {
 
 // フィルタ適用後（回転前）のキャンバスを返す（キャッシュ付き）
 function buildFilteredCanvas() {
-  const key = state.warpId + ':' + state.filter;
+  const key = state.warpId + ':' + state.filter + ':' + state.bwC;
   if (state.filteredCanvas && state.filteredKey === key) return state.filteredCanvas;
 
   const srcC = state.warpedCanvas;
@@ -882,7 +882,7 @@ function buildFilteredCanvas() {
       }
     }
     const rad = Math.max(8, Math.round(Math.min(w, h) * 0.02));
-    const C = 10;
+    const C = state.bwC; // 大=薄（白多め） / 小=濃（黒多め）
     for (let y = 0; y < h; y++) {
       const y0 = Math.max(0, y - rad), y1 = Math.min(h - 1, y + rad);
       for (let x = 0; x < w; x++) {
@@ -931,7 +931,7 @@ function rotateCanvas(srcC, deg) {
 function renderResult() {
   if (!state.warpedCanvas) return;
   const filtered = buildFilteredCanvas();
-  const final = rotateCanvas(filtered, state.rotBase + state.rotFine);
+  const final = rotateCanvas(filtered, state.rotBase);
   dstCanvas.width = final.width;
   dstCanvas.height = final.height;
   dstCtx.drawImage(final, 0, 0);
@@ -1108,19 +1108,21 @@ filterSeg.querySelectorAll('.seg-btn').forEach((btn) => {
     filterSeg.querySelectorAll('.seg-btn').forEach((b) => b.classList.remove('is-active'));
     btn.classList.add('is-active');
     state.filter = btn.dataset.filter;
+    bwRow.hidden = state.filter !== 'bw'; // 白黒のときだけ濃さスライダー
     renderResult();
   });
 });
 
-// 回転（90°単位＋微調整）
-rotL.addEventListener('click', () => { if (!state.warpedCanvas) return; state.rotBase -= 90; renderResult(); });
-rotR.addEventListener('click', () => { if (!state.warpedCanvas) return; state.rotBase += 90; renderResult(); });
-rotFine.addEventListener('input', () => {
+// 白黒のしきい値（濃さ）。スライダー右=濃、左=薄。C = 10 - value
+bwThresh.addEventListener('input', () => {
   if (!state.warpedCanvas) return;
-  state.rotFine = parseFloat(rotFine.value) || 0;
-  rotFineVal.textContent = state.rotFine + '°';
+  state.bwC = 10 - (parseFloat(bwThresh.value) || 0);
   renderResult();
 });
+
+// 回転（90°単位）
+rotL.addEventListener('click', () => { if (!state.warpedCanvas) return; state.rotBase -= 90; renderResult(); });
+rotR.addEventListener('click', () => { if (!state.warpedCanvas) return; state.rotBase += 90; renderResult(); });
 
 // 結果を Blob 化
 function resultBlob(mime, quality) {
