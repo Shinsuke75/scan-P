@@ -278,12 +278,13 @@ body {
   padding: 1px 6px;
   vertical-align: middle;
 }
-.save-row { margin-top: 2px; gap: 8px; }
+.save-row { margin-top: 2px; gap: 8px; align-items: stretch; }
 .save-btn {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 46px;
   font-size: 0.95rem;
   padding: 10px 6px;
+  white-space: nowrap;
 }
 .save-hint {
   margin: 2px 2px 0;

@@ -29,15 +29,33 @@ const bwThresh = document.getElementById('bwThresh');
 const rotL = document.getElementById('rotL');
 const rotR = document.getElementById('rotR');
 const savePhotoBtn = document.getElementById('savePhotoBtn');
+const saveHint = document.getElementById('saveHint');
 const downloadPngBtn = document.getElementById('downloadPngBtn');
 const downloadJpgBtn = document.getElementById('downloadJpgBtn');
+
+// 端末がファイル共有（＝写真アルバムへ保存）に対応しているか
+const CAN_SHARE_FILES = (() => {
+  try {
+    return !!(navigator.canShare &&
+      navigator.canShare({ files: [new File(['x'], 'x.png', { type: 'image/png' })] }));
+  } catch (_) { return false; }
+})();
+// PC など共有不可なら「写真に保存」ボタンは隠す（PNG/JPEG で保存できるため）
+if (!CAN_SHARE_FILES) {
+  savePhotoBtn.hidden = true;
+  if (saveHint) {
+    saveHint.innerHTML =
+      '<b>PNG</b>＝高画質・文字くっきり（白黒・グレー向き）／' +
+      '<b>JPEG</b>＝軽量・カラー写真向き（PC では保存先フォルダにダウンロード）';
+  }
+}
 
 const srcCtx = srcCanvas.getContext('2d');
 const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = '2026-06-14 v19';
+const BUILD = '2026-06-15 v20';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -849,7 +867,7 @@ async function runWarp() {
     updateBwRow();
     setStatus('done', `補正完了（${result.width}×${result.height}px）`);
     // モバイルでは結果が画面外（下）に出るため、結果ツールへスクロールして見せる
-    try { resultTools.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (_) {}
+    try { dstCanvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
   } catch (e) {
     console.error(e);
     setStatus('error', '補正処理でエラーが発生しました');

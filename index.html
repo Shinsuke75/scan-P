@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>scan-P｜ドキュメントスキャナ（台形補正）</title>
-  <link rel="stylesheet" href="style.css?v=19" />
+  <link rel="stylesheet" href="style.css?v=20" />
 </head>
 <body>
   <header class="app-header">
@@ -45,7 +45,12 @@
       <div class="panel card">
         <h2 class="panel-title">補正結果</h2>
 
-        <!-- 結果のすぐ近くに後処理ツール（スマホで戻らなくて済む） -->
+        <div class="canvas-wrap result-wrap" id="dstWrap">
+          <canvas id="dstCanvas"></canvas>
+          <p class="placeholder" id="dstPlaceholder">「この枠で補正する」を押すと結果が表示されます</p>
+        </div>
+
+        <!-- 後処理ツール（結果画像のすぐ下） -->
         <div class="result-tools" id="resultTools" hidden>
           <div class="tool-row">
             <span class="tool-label">仕上げ</span>
@@ -67,20 +72,15 @@
             <button id="rotR" class="btn btn-ghost btn-sm">⟳ 90°</button>
           </div>
           <div class="tool-row save-row">
-            <button id="savePhotoBtn" class="btn btn-primary save-btn">📷 アルバムに保存</button>
+            <button id="savePhotoBtn" class="btn btn-primary save-btn">📷 写真に保存</button>
             <button id="downloadPngBtn" class="btn btn-ghost save-btn">⬇️ PNG</button>
             <button id="downloadJpgBtn" class="btn btn-ghost save-btn">⬇️ JPEG</button>
           </div>
-          <p class="save-hint">
-            <b>アルバムに保存</b>＝スマホの写真アルバムへ／
+          <p class="save-hint" id="saveHint">
+            <b>写真に保存</b>＝スマホの写真アルバムへ／
             <b>PNG</b>＝高画質・文字くっきり（白黒・グレー向き）／
             <b>JPEG</b>＝軽量・カラー写真向き
           </p>
-        </div>
-
-        <div class="canvas-wrap result-wrap" id="dstWrap">
-          <canvas id="dstCanvas"></canvas>
-          <p class="placeholder" id="dstPlaceholder">「この枠で補正する」を押すと結果が表示されます</p>
         </div>
       </div>
     </section>
@@ -91,6 +91,6 @@
     <p class="build-stamp" id="buildStamp"></p>
   </footer>
 
-  <script src="script.js?v=19"></script>
+  <script src="script.js?v=20"></script>
 </body>
 </html>
