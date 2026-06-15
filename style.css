@@ -376,13 +376,15 @@ body {
    c) .auto-badge / .spinner — JS が動的生成。
    ═══════════════════════════════════════════════════════ */
 
-/* a) overlayCanvas */
+/* a) overlayCanvas
+   touch-action:pan-y → 画像上でも縦スクロール可。頂点/辺をつかんだ間だけ
+   JS が touchmove で preventDefault してスクロールを止める。 */
 .overlay {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  touch-action: none;
+  touch-action: pan-y;
   cursor: grab;
   -webkit-touch-callout: none;
   -webkit-user-select: none;

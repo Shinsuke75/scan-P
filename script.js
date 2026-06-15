@@ -55,7 +55,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = '2026-06-15 v21';
+const BUILD = '2026-06-15 v22';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -399,6 +399,12 @@ function endDrag(ev) {
 }
 overlayCanvas.addEventListener('pointerup', endDrag);
 overlayCanvas.addEventListener('pointercancel', endDrag);
+
+// タッチ：頂点/辺をドラッグ中だけスクロールを抑止する（preventDefault が
+// 確実）。それ以外（画像をなぞるだけ）はページを縦スクロールできる。
+overlayCanvas.addEventListener('touchmove', (ev) => {
+  if (activeIdx !== -1 || activeEdge !== -1) ev.preventDefault();
+}, { passive: false });
 
 function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
