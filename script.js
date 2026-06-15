@@ -37,7 +37,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = '2026-06-14 v18';
+const BUILD = '2026-06-14 v19';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -432,9 +432,20 @@ function showLoupe(ptView) {
   // 背景＝市松模様（＝画像の外。余白に出ているのが一目で分かる）
   loupeCtx.fillStyle = getCheckerPattern();
   loupeCtx.fillRect(0, 0, px, px);
-  // 写真部分をクリスプに重ね描き（画像外は描かれず市松が残る）
+  // 写真部分をクリスプに重ね描き。
+  // ※ iOS Safari は元範囲が画像外へ少しでもはみ出すと drawImage 全体を
+  //   描画しないため、画像と窓の「重なり部分だけ」を切り出して描く。
   loupeCtx.imageSmoothingEnabled = true;
-  loupeCtx.drawImage(state.bitmap, sxN, syN, winNative, winNative, 0, 0, px, px);
+  const ix0 = Math.max(0, sxN), iy0 = Math.max(0, syN);
+  const ix1 = Math.min(state.nativeW, sxN + winNative);
+  const iy1 = Math.min(state.nativeH, syN + winNative);
+  if (ix1 > ix0 && iy1 > iy0) {
+    const sW = ix1 - ix0, sH = iy1 - iy0;
+    loupeCtx.drawImage(
+      state.bitmap, ix0, iy0, sW, sH,
+      (ix0 - sxN) * sc, (iy0 - syN) * sc, sW * sc, sH * sc
+    );
+  }
   // 写真の縁（境界線）＝「ここが写真の端」
   const bx = (0 - sxN) * sc, by = (0 - syN) * sc;
   loupeCtx.strokeStyle = 'rgba(37,99,235,0.9)';
