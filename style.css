@@ -1,202 +1,325 @@
+/* ─────────────────────────────────────────────────────────────
+   scan-P — style.css  (シンプル・モダン版)
+   ───────────────────────────────────────────────────────────── */
+
+/* ═══════════════════════════════════════════════════════
+   0. トークン — scampi（スカンピエビ）カラー
+   ═══════════════════════════════════════════════════════ */
 :root {
-  --bg: #f1f5f9;
-  --card: #ffffff;
-  --ink: #0f172a;
-  --muted: #64748b;
-  --border: #e2e8f0;
-  --primary: #2563eb;
-  --primary-d: #1d4ed8;
-  --accent: #059669;
-  --accent-d: #047857;
-  --point: #f59e0b;
-  --line: #2563eb;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.06);
-  --radius: 14px;
+  /* サーフェス — サーモン/クリーム系 */
+  --bg:       #fdf0e8;
+  --surface:  #ffffff;
+  --surface-2:#fdf7f4;
+  --border:   #f0ddd3;
+  --border-2: #d9baac;
+
+  /* テキスト — 温かみのある濃色 */
+  --text:   #1e0e09;
+  --text-2: #4a2418;
+  --muted:  #8a5f52;
+  --muted-2:#b8958a;
+
+  /* アクセント — スカンピの甲殻コーラルレッド */
+  --blue:   #c13b25;
+  --blue-d: #a32f1b;
+  --blue-l: #fff3ef;
+
+  /* メインCTA — コーラルオレンジ */
+  --green:   #bf4427;
+  --green-d: #a33319;
+  --green-l: #fff3ef;
+
+  --r:    12px;
+  --r-sm:  8px;
+  --r-xs:  6px;
+
+  --shadow:    0 1px 3px rgba(80,20,5,0.09), 0 1px 2px rgba(80,20,5,0.05);
+  --shadow-md: 0 4px 12px rgba(80,20,5,0.08), 0 2px 4px rgba(80,20,5,0.04);
+
+  --tr: 0.15s ease;
+
+  /* ステータス */
+  --info-bg: #fff3ef; --info-fg: #a32f1b; --info-bd: #f9c4b4;
+  --work-bg: #fff7ed; --work-fg: #92400e; --work-bd: #fed7aa;
+  --done-bg: #f0fdf4; --done-fg: #15803d; --done-bd: #bbf7d0;
+  --error-bg:#fff1f2; --error-fg:#be123c; --error-bd:#fecdd3;
 }
 
-* { box-sizing: border-box; }
 
-html, body {
-  margin: 0;
-  padding: 0;
-}
+/* ═══════════════════════════════════════════════════════
+   1. リセット
+   ═══════════════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* JS が hidden 属性で表示制御する — !important で必ず効かせる */
+[hidden] { display: none !important; }
+
+html, body { margin: 0; padding: 0; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+  font-family:
+    -apple-system, BlinkMacSystemFont,
+    "Hiragino Sans", "Hiragino Kaku Gothic ProN",
     "Noto Sans JP", Meiryo, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
   background: var(--bg);
-  color: var(--ink);
-  line-height: 1.5;
+  color: var(--text);
   -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Header / Footer */
+
+/* ═══════════════════════════════════════════════════════
+   2. ヘッダー / フッター
+   ═══════════════════════════════════════════════════════ */
 .app-header {
   text-align: center;
-  padding: 20px 16px 8px;
+  padding: 36px 20px 18px;
 }
+
 .app-title {
   margin: 0;
-  font-size: 1.8rem;
+  font-size: 2rem;
   font-weight: 800;
-  letter-spacing: -0.02em;
-  background: linear-gradient(90deg, var(--primary), var(--accent));
+  letter-spacing: -0.05em;
+  background: linear-gradient(135deg, #e8603c 0%, #c13b25 50%, #8b1a0a 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-}
-.app-subtitle {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-.app-footer {
-  text-align: center;
-  color: var(--muted);
-  font-size: 0.8rem;
-  padding: 24px 16px 40px;
-}
-.build-stamp {
-  margin: 4px 0 0;
-  font-size: 0.72rem;
-  opacity: 0.7;
+  line-height: 1;
 }
 
+.app-subtitle {
+  margin: 8px 0 0;
+  font-size: 0.83rem;
+  color: var(--muted);
+}
+
+.app-footer {
+  text-align: center;
+  color: var(--muted-2);
+  font-size: 0.75rem;
+  padding: 24px 20px 48px;
+  line-height: 1.9;
+}
+
+.build-stamp {
+  display: block;
+  font-size: 0.68rem;
+  opacity: 0.6;
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   3. コンテナ
+   ═══════════════════════════════════════════════════════ */
 .container {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 12px 16px;
+  padding: 0 20px 24px;
 }
 
+
+/* ═══════════════════════════════════════════════════════
+   4. カード共通
+   ═══════════════════════════════════════════════════════ */
 .card {
-  background: var(--card);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--r);
   box-shadow: var(--shadow);
 }
 
-/* Toolbar */
+
+/* ═══════════════════════════════════════════════════════
+   5. ツールバー → 透明化してファイルボタンをドロップゾーン風に
+   ═══════════════════════════════════════════════════════ */
+.toolbar.card {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0 0 16px;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
-  padding: 14px 16px;
-  margin-bottom: 12px;
 }
 
+/* ファイル選択ボタン → 全幅のドロップゾーン
+   .btn-primary の後に定義されるが !important で確実に上書き */
+.file-btn {
+  width: 100%;
+  padding: 18px 24px;
+  background: var(--surface) !important;
+  border: 1.5px dashed var(--border-2) !important;
+  border-radius: var(--r) !important;
+  color: var(--muted) !important;
+  box-shadow: none !important;
+  font-size: 0.92rem;
+  font-weight: 500;
+  justify-content: center;
+  letter-spacing: 0.1px;
+  transition: border-color var(--tr), background var(--tr), color var(--tr);
+}
+
+.file-btn:hover:not(:disabled) {
+  border-color: var(--blue) !important;
+  background: var(--blue-l) !important;
+  color: var(--blue) !important;
+  box-shadow: none !important;
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   6. ボタン
+   ═══════════════════════════════════════════════════════ */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  font-size: 1rem;
+  font-size: 0.91rem;
   font-weight: 600;
-  padding: 12px 18px;
-  border: 1px solid transparent;
-  border-radius: 10px;
+  font-family: inherit;
+  padding: 10px 18px;
+  border: 1.5px solid transparent;
+  border-radius: var(--r-sm);
   cursor: pointer;
-  transition: transform 0.05s ease, background 0.15s ease, box-shadow 0.15s ease;
+  transition: background var(--tr), border-color var(--tr), box-shadow var(--tr), transform 0.08s ease;
   user-select: none;
   -webkit-user-select: none;
+  white-space: nowrap;
   min-height: 44px;
+  line-height: 1;
 }
-.btn:active { transform: translateY(1px); }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-.btn-primary { background: var(--primary); color: #fff; }
-.btn-primary:hover:not(:disabled) { background: var(--primary-d); }
-.btn-accent { background: var(--accent); color: #fff; }
-.btn-accent:hover:not(:disabled) { background: var(--accent-d); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: 0.52; cursor: not-allowed; pointer-events: none; }
+
+.btn-primary {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--blue-d);
+  border-color: var(--blue-d);
+  box-shadow: 0 2px 8px rgba(37,99,235,0.3);
+}
+
+.btn-accent {
+  background: var(--green);
+  color: #fff;
+  border-color: var(--green);
+}
+.btn-accent:hover:not(:disabled) {
+  background: var(--green-d);
+  border-color: var(--green-d);
+  box-shadow: 0 2px 8px rgba(5,150,105,0.3);
+}
+
 .btn-ghost {
-  background: #fff;
-  color: var(--ink);
+  background: var(--surface);
+  color: var(--text-2);
   border-color: var(--border);
 }
-.btn-ghost:hover:not(:disabled) { background: #f8fafc; }
-
-.file-btn { margin: 0; }
-
-.filter-group,
-.download-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.filter-label {
-  font-size: 0.9rem;
-  color: var(--muted);
-  font-weight: 600;
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border-2);
 }
 
-.segmented {
-  display: inline-flex;
-  background: #f1f5f9;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 3px;
-  gap: 2px;
+.btn-big {
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 14px 20px;
+  min-height: 50px;
+  letter-spacing: 0.02em;
 }
-.seg-btn {
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-weight: 600;
-  font-size: 0.9rem;
+
+.btn-sm {
+  font-size: 0.86rem;
   padding: 8px 14px;
-  border-radius: 8px;
-  cursor: pointer;
   min-height: 38px;
 }
-.seg-btn.is-active {
-  background: #fff;
-  color: var(--primary);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-}
 
-/* Status */
+
+/* ═══════════════════════════════════════════════════════
+   7. ステータス  (.status.info|work|done|error が JS で切り替わる)
+   ═══════════════════════════════════════════════════════ */
 .status {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 16px;
-  margin-bottom: 12px;
-  border-radius: 10px;
-  font-size: 0.92rem;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border-radius: var(--r-sm);
+  font-size: 0.86rem;
   font-weight: 600;
+  border: 1px solid;
 }
-.status.info { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
-.status.work { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
-.status.done { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
-.status.error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+
+.status.info  { background: var(--info-bg);  color: var(--info-fg);  border-color: var(--info-bd); }
+.status.work  { background: var(--work-bg);  color: var(--work-fg);  border-color: var(--work-bd); }
+.status.done  { background: var(--done-bg);  color: var(--done-fg);  border-color: var(--done-bd); }
+.status.error { background: var(--error-bg); color: var(--error-fg); border-color: var(--error-bd); }
+
+/* スピナー（status + auto-badge で使用） */
 .spinner {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border: 2px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
-  flex: 0 0 auto;
+  flex-shrink: 0;
 }
+
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Workspace layout: PC = side by side, mobile = stacked */
+
+/* ═══════════════════════════════════════════════════════
+   8. ワークスペース（2カラム / スマホは縦積み）
+   ═══════════════════════════════════════════════════════ */
 .workspace {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  align-items: start;   /* 画像の上端をそろえる */
   gap: 16px;
 }
+
 @media (max-width: 820px) {
   .workspace { grid-template-columns: 1fr; }
 }
 
-.panel { padding: 14px 16px 18px; }
-.panel-title {
-  margin: 0 0 10px;
-  font-size: 1rem;
-  font-weight: 700;
+
+/* ═══════════════════════════════════════════════════════
+   9. パネル
+   ═══════════════════════════════════════════════════════ */
+.panel {
+  padding: 0;
+  overflow: hidden;
 }
 
+.panel-title {
+  margin: 0;
+  padding: 12px 18px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   10. キャンバスラップ
+   #srcCanvas と #overlayCanvas (.overlay) を flex 中央揃えで重ねる。
+   キャンバスに CSS の固定 px を設定しない（JS が属性で制御）。
+   ═══════════════════════════════════════════════════════ */
 .canvas-wrap {
   position: relative;
   width: 100%;
@@ -204,107 +327,21 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: repeating-conic-gradient(#f8fafc 0% 25%, #eef2f7 0% 50%) 50% / 22px 22px;
-  border: 1px dashed var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-  /* iOS の長押しメニュー（コピー/検索）・テキスト選択を抑止 */
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
 }
 
+/* canvas 共通 */
 #srcCanvas,
 #overlayCanvas,
 #dstCanvas {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
-}
-
-/* 結果パネルの後処理ツール */
-.result-tools {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  background: #f8fafc;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-}
-.tool-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.tool-label {
-  font-size: 0.85rem;
-  font-weight: 700;
-  color: var(--muted);
-  min-width: 3.2em;
-}
-.btn-sm {
-  font-size: 0.9rem;
-  padding: 8px 12px;
-  min-height: 38px;
-}
-.result-tools input[type="range"] {
-  flex: 1;
-  min-width: 90px;
-  accent-color: var(--primary);
-  touch-action: none;
-}
-.result-tools input[type="range"]:disabled {
-  accent-color: #cbd5e1;
-  opacity: 0.6;
-}
-.rng-end {
-  font-size: 0.85rem;
-  color: var(--muted);
-  font-weight: 700;
-}
-/* 白黒のみの行：白黒以外では淡色＋操作不可 */
-#bwRow.is-disabled { opacity: 0.5; }
-.only-note {
-  display: inline-block;
-  margin-left: 4px;
-  font-size: 0.68rem;
-  font-weight: 700;
-  color: #fff;
-  background: var(--muted);
-  border-radius: 6px;
-  padding: 1px 6px;
-  vertical-align: middle;
-}
-.save-row { margin-top: 2px; gap: 8px; align-items: stretch; }
-.save-btn {
-  flex: 1 1 0;
-  min-height: 46px;
-  font-size: 0.95rem;
-  padding: 10px 6px;
-  white-space: nowrap;
-}
-.save-hint {
-  margin: 2px 2px 0;
-  font-size: 0.76rem;
-  line-height: 1.5;
-  color: var(--muted);
-}
-.save-hint b { color: var(--ink); }
-
-/* 元画像パネル下の主要アクション */
-.src-actions {
-  display: flex;
-  gap: 10px;
-  margin-top: 12px;
-}
-.src-actions .btn { flex: 1; }
-.btn-big {
-  font-size: 1.05rem;
-  padding: 14px 18px;
-  min-height: 50px;
 }
 
 #srcCanvas,
@@ -314,55 +351,252 @@ body {
   height: auto;
 }
 
-/* Overlay sits exactly on top of the source canvas and receives pointer input */
+/* プレースホルダー — absolute で canvas-wrap 全体に中央配置 */
+.placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-2);
+  font-size: 0.86rem;
+  text-align: center;
+  padding: 24px;
+  margin: 0;
+  line-height: 1.7;
+  pointer-events: none;
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   11. JS 依存スタイル（変更・削除禁止）
+   ─────────────────────────────────────────────────────
+   a) .overlay — srcCanvas と完全重なり。touch-action:none 必須。
+   b) .loupe  — 130×130px 固定（LOUPE_SIZE=130 と一致）。
+   c) .auto-badge / .spinner — JS が動的生成。
+   ═══════════════════════════════════════════════════════ */
+
+/* a) overlayCanvas */
 .overlay {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  touch-action: none;       /* prevent scroll/zoom while dragging points */
+  touch-action: none;
   cursor: grab;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
+/* b) ルーペ（130px 固定・変更不可）*/
 .loupe {
   position: absolute;
   width: 130px;
   height: 130px;
   border-radius: 50%;
-  border: 3px solid #fff;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  border: 3px solid rgba(255,255,255,0.95);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.22), 0 0 0 1.5px rgba(37,99,235,0.3);
   pointer-events: none;
   z-index: 5;
+  overflow: hidden;
 }
 
+/* c) 自動検出バッジ */
 .auto-badge {
   position: absolute;
-  left: 10px;
-  top: 10px;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 6;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
-  background: rgba(15, 23, 42, 0.82);
+  padding: 6px 14px;
+  background: rgba(17,24,39,0.82);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   color: #fff;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 600;
   border-radius: 999px;
   pointer-events: none;
-  backdrop-filter: blur(2px);
+  white-space: nowrap;
 }
 
-.placeholder {
-  color: var(--muted);
-  font-size: 0.9rem;
-  text-align: center;
-  padding: 24px;
-  margin: 0;
-}
 
+/* ═══════════════════════════════════════════════════════
+   12. ヒント・src アクション
+   ═══════════════════════════════════════════════════════ */
 .hint {
-  margin: 10px 2px 0;
+  margin: 0;
+  padding: 7px 18px;
+  font-size: 0.73rem;
+  color: var(--muted-2);
+  line-height: 1.5;
+  opacity: 0.75;
+}
+
+.src-actions {
+  display: flex;
+  gap: 10px;
+  padding: 12px 18px 16px;
+}
+
+.src-actions .btn { flex: 1; }
+
+
+/* ═══════════════════════════════════════════════════════
+   13. 後処理ツール
+   ═══════════════════════════════════════════════════════ */
+.result-tools {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 18px 16px;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.tool-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tool-label {
+  font-size: 0.75rem;
+  font-weight: 700;
   color: var(--muted);
-  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  min-width: 3em;
+  flex-shrink: 0;
+}
+
+/* セグメントコントロール（JS が .is-active を付け外し） */
+.segmented {
+  display: inline-flex;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 3px;
+  gap: 2px;
+}
+
+.seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.86rem;
+  font-family: inherit;
+  padding: 6px 14px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition: background var(--tr), color var(--tr);
+  min-height: 34px;
+  white-space: nowrap;
+}
+
+.seg-btn:hover:not(.is-active) {
+  background: rgba(0,0,0,0.05);
+  color: var(--text-2);
+}
+
+/* JS が付与 */
+.seg-btn.is-active {
+  background: var(--surface);
+  color: var(--blue);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+  font-weight: 700;
+}
+
+/* 濃さ行（JS が .is-disabled を付け外し） */
+#bwRow.is-disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.rng-end {
+  font-size: 0.76rem;
+  color: var(--muted-2);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.result-tools input[type="range"] {
+  flex: 1;
+  min-width: 80px;
+  height: 4px;
+  accent-color: var(--blue);
+  cursor: pointer;
+  touch-action: none;
+  border-radius: 99px;
+}
+
+.result-tools input[type="range"]:disabled {
+  accent-color: var(--border-2);
+}
+
+.only-note {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  padding: 1px 5px;
+  font-size: 0.64rem;
+  font-weight: 700;
+  color: #fff;
+  background: var(--muted-2);
+  border-radius: 4px;
+  vertical-align: middle;
+  line-height: 1.4;
+}
+
+/* 保存ボタン群（同幅・横一列） */
+.save-row {
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.save-btn {
+  flex: 1 1 0;
+  min-height: 44px;
+  font-size: 0.88rem;
+  padding: 10px 8px;
+  white-space: nowrap;
+}
+
+.save-hint {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.save-hint b { color: var(--text-2); }
+
+/* 互換 */
+.filter-group, .download-group { display: flex; align-items: center; gap: 8px; }
+.filter-label { font-size: 0.86rem; color: var(--muted); font-weight: 600; }
+
+
+/* ═══════════════════════════════════════════════════════
+   14. レスポンシブ
+   ═══════════════════════════════════════════════════════ */
+@media (max-width: 820px) {
+  .container   { padding: 0 14px 20px; }
+  .app-header  { padding: 24px 16px 14px; }
+  .app-title   { font-size: 1.7rem; }
+  .src-actions { flex-wrap: nowrap; }
+}
+
+@media (max-width: 480px) {
+  .app-title { font-size: 1.45rem; }
+  .segmented { width: 100%; }
+  .seg-btn   { flex: 1; }
+  .save-row  { flex-wrap: wrap; }
+  .save-btn  { flex: 1 1 calc(50% - 4px); }
 }
