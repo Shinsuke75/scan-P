@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>scan-P｜ドキュメントスキャナ（台形補正）</title>
-  <link rel="stylesheet" href="style.css?v=23" />
+  <link rel="stylesheet" href="style.css?v=24" />
 </head>
 <body>
   <header class="app-header">
@@ -13,14 +13,6 @@
   </header>
 
   <main class="container">
-    <!-- 操作パネル -->
-    <section class="toolbar card">
-      <label class="btn btn-primary file-btn">
-        <input type="file" id="fileInput" accept="image/*" hidden />
-        <span>📷 画像を選択</span>
-      </label>
-    </section>
-
     <!-- ステータス -->
     <div id="status" class="status" hidden></div>
 
@@ -28,11 +20,18 @@
     <section class="workspace">
       <div class="panel card">
         <h2 class="panel-title">元画像 ＋ 頂点調整</h2>
+        <div class="src-input">
+          <label class="btn btn-primary src-in-btn">
+            <input type="file" id="fileInput" accept="image/*" hidden />
+            <span>📷 画像を選択</span>
+          </label>
+          <button id="pasteBtn" class="btn btn-ghost src-in-btn">📋 貼り付け</button>
+        </div>
         <div class="canvas-wrap" id="srcWrap">
           <canvas id="srcCanvas"></canvas>
           <canvas id="overlayCanvas" class="overlay"></canvas>
           <canvas id="loupe" class="loupe" hidden></canvas>
-          <p class="placeholder" id="srcPlaceholder">画像を選択してください</p>
+          <p class="placeholder" id="srcPlaceholder">画像を選択／貼り付けしてください</p>
         </div>
         <p class="hint">オレンジの点＝角を移動（画像の外＝余白にも置けます）／青いひし形＝辺をそのまま平行移動</p>
         <!-- 編集中のキャンバスのすぐ下に主要アクション -->
@@ -72,14 +71,16 @@
             <button id="rotR" class="btn btn-ghost btn-sm">⟳ 90°</button>
           </div>
           <div class="tool-row save-row">
+            <button id="copyBtn" class="btn btn-accent save-btn">📋 コピー</button>
             <button id="savePhotoBtn" class="btn btn-primary save-btn">📷 写真に保存</button>
+          </div>
+          <div class="tool-row save-row">
             <button id="downloadPngBtn" class="btn btn-ghost save-btn">⬇️ PNG</button>
             <button id="downloadJpgBtn" class="btn btn-ghost save-btn">⬇️ JPEG</button>
           </div>
           <p class="save-hint" id="saveHint">
-            <b>写真に保存</b>＝スマホの写真アルバムへ／
-            <b>PNG</b>＝高画質・文字くっきり（白黒・グレー向き）／
-            <b>JPEG</b>＝軽量・カラー写真向き
+            <b>コピー</b>＝クリップボードへ／<b>写真に保存</b>＝スマホのアルバムへ／
+            <b>PNG/JPEG</b>＝ダウンロード（PNG=高画質・文字くっきり / JPEG=軽量・写真向き）
           </p>
         </div>
       </div>
@@ -91,6 +92,6 @@
     <p class="build-stamp" id="buildStamp"></p>
   </footer>
 
-  <script src="script.js?v=23"></script>
+  <script src="script.js?v=24"></script>
 </body>
 </html>

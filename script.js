@@ -32,22 +32,31 @@ const savePhotoBtn = document.getElementById('savePhotoBtn');
 const saveHint = document.getElementById('saveHint');
 const downloadPngBtn = document.getElementById('downloadPngBtn');
 const downloadJpgBtn = document.getElementById('downloadJpgBtn');
+const pasteBtn = document.getElementById('pasteBtn');
+const copyBtn = document.getElementById('copyBtn');
 
-// 端末がファイル共有（＝写真アルバムへ保存）に対応しているか
+// 端末/ブラウザの対応状況
 const CAN_SHARE_FILES = (() => {
   try {
     return !!(navigator.canShare &&
       navigator.canShare({ files: [new File(['x'], 'x.png', { type: 'image/png' })] }));
   } catch (_) { return false; }
 })();
-// PC など共有不可なら「写真に保存」ボタンは隠す（PNG/JPEG で保存できるため）
-if (!CAN_SHARE_FILES) {
-  savePhotoBtn.hidden = true;
-  if (saveHint) {
-    saveHint.innerHTML =
-      '<b>PNG</b>＝高画質・文字くっきり（白黒・グレー向き）／' +
-      '<b>JPEG</b>＝軽量・カラー写真向き（PC では保存先フォルダにダウンロード）';
-  }
+const CAN_COPY_IMG = !!(navigator.clipboard && window.ClipboardItem && navigator.clipboard.write);
+const CAN_PASTE_IMG = !!(navigator.clipboard && navigator.clipboard.read);
+
+// 非対応のボタンは隠す
+if (!CAN_SHARE_FILES) savePhotoBtn.hidden = true;
+if (!CAN_COPY_IMG && copyBtn) copyBtn.hidden = true;
+if (!CAN_PASTE_IMG && pasteBtn) pasteBtn.hidden = true;
+
+// 保存の説明文を対応状況に合わせて生成
+if (saveHint) {
+  const parts = [];
+  if (CAN_COPY_IMG) parts.push('<b>コピー</b>＝クリップボードへ');
+  if (CAN_SHARE_FILES) parts.push('<b>写真に保存</b>＝スマホのアルバムへ');
+  parts.push('<b>PNG/JPEG</b>＝ダウンロード（PNG=高画質・文字くっきり / JPEG=軽量・写真向き）');
+  saveHint.innerHTML = parts.join('／');
 }
 
 const srcCtx = srcCanvas.getContext('2d');
@@ -55,7 +64,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = 'v1.00 (2026-06-15)';
+const BUILD = 'v1.10 (2026-06-16)';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -1229,6 +1238,65 @@ savePhotoBtn.addEventListener('click', async () => {
     console.warn('[scan-P] share failed', e);
     downloadResult('image/jpeg', 'jpg', 0.95);
     setStatus('info', '共有できなかったため、ダウンロードしました');
+  }
+});
+
+/* ============================================================
+ * クリップボード（貼り付け / コピー）
+ * ============================================================ */
+// 補正画像をクリップボードへコピー（PNG）
+async function copyResultToClipboard() {
+  if (!state.warpedCanvas) return;
+  try {
+    const blob = await resultBlob('image/png');
+    if (!blob) throw new Error('blob 生成に失敗');
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    setStatus('done', '補正画像をクリップボードにコピーしました');
+  } catch (e) {
+    console.warn('[scan-P] copy failed', e);
+    setStatus('error', 'コピーできませんでした（対応していない環境かもしれません）');
+  }
+}
+
+// クリップボードの画像を貼り付けて読み込む（ボタン用：非同期 Clipboard API）
+async function pasteFromClipboard() {
+  setStatus('work', 'クリップボードを読み取り中…', true);
+  try {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      const type = item.types.find((t) => t.startsWith('image/'));
+      if (type) {
+        const blob = await item.getType(type);
+        await loadImageFile(blob);
+        return;
+      }
+    }
+    setStatus('info', 'クリップボードに画像が見つかりませんでした');
+  } catch (e) {
+    console.warn('[scan-P] paste failed', e);
+    setStatus('error', 'クリップボードを読めませんでした（許可が必要かもしれません）');
+  }
+}
+
+if (copyBtn) copyBtn.addEventListener('click', copyResultToClipboard);
+if (pasteBtn) pasteBtn.addEventListener('click', pasteFromClipboard);
+
+// Ctrl/Cmd+V でも貼り付け（主に PC）
+window.addEventListener('paste', (e) => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (const it of items) {
+    if (it.type && it.type.startsWith('image/')) {
+      const blob = it.getAsFile();
+      if (blob) {
+        e.preventDefault();
+        loadImageFile(blob).catch((err) => {
+          console.error(err);
+          setStatus('error', '貼り付けた画像を読み込めませんでした');
+        });
+        return;
+      }
+    }
   }
 });
 

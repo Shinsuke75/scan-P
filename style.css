@@ -447,6 +447,14 @@ body {
 
 .src-actions .btn { flex: 1; }
 
+/* 画像入力（選択 / 貼り付け）— パネル上部に均等2ボタン */
+.src-input {
+  display: flex;
+  gap: 8px;
+  padding: 4px 18px 12px;
+}
+.src-in-btn { flex: 1 1 0; min-width: 0; }
+
 
 /* ═══════════════════════════════════════════════════════
    13. 後処理ツール
