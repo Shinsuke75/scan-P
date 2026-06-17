@@ -64,7 +64,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = 'v1.20 (2026-06-16)';
+const BUILD = 'v1.30 (2026-06-16)';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -1245,13 +1245,32 @@ savePhotoBtn.addEventListener('click', async () => {
  * クリップボード（貼り付け / コピー）
  * ============================================================ */
 // 補正画像をクリップボードへコピー（PNG）
-async function copyResultToClipboard() {
+// 補正画像をクリップボードへコピー（PNG）。
+// ※ WebKit(iOS Safari/Chrome) は「ユーザー操作と同じ実行フロー内」で
+//   clipboard.write を呼ぶ必要がある。await でBlobを作ってから呼ぶと失敗するため、
+//   ClipboardItem に Blob の Promise を渡し、await せず即 write する。
+function copyResultToClipboard() {
   if (!state.warpedCanvas) return;
+  if (!(navigator.clipboard && window.ClipboardItem && navigator.clipboard.write)) {
+    setStatus('error', 'この環境はコピーに対応していません');
+    return;
+  }
   try {
-    const blob = await resultBlob('image/png');
-    if (!blob) throw new Error('blob 生成に失敗');
-    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-    setStatus('done', '補正画像をクリップボードにコピーしました');
+    const blobPromise = new Promise((resolve, reject) => {
+      try {
+        dstCanvas.toBlob((b) => (b ? resolve(b) : reject(new Error('blob 生成に失敗'))), 'image/png');
+      } catch (e) { reject(e); }
+    });
+    const item = new ClipboardItem({ 'image/png': blobPromise });
+    // ここで await しない（ユーザー操作のフローを維持）
+    navigator.clipboard.write([item]).then(
+      () => setStatus('done', '補正画像をクリップボードにコピーしました'),
+      (e) => {
+        console.warn('[scan-P] copy failed', e);
+        const n = (e && e.name) ? '：' + e.name : '';
+        setStatus('error', 'コピーできませんでした' + n);
+      }
+    );
   } catch (e) {
     console.warn('[scan-P] copy failed', e);
     setStatus('error', 'コピーできませんでした（対応していない環境かもしれません）');
