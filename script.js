@@ -5,9 +5,10 @@
  *
  * 設計の要:
  *  A. 表示解像度と処理解像度を分離（表示は縮小ビュー、warp は元解像度）
- *  B. OpenCV.js は遅延ロード（UI を固めない）
+ *  B. 射影変換は WebGL（外部ライブラリ不要）。不可時は純 JS フォールバック
  *  C. EXIF 向きは createImageBitmap で補正
- *  D. 入力は Pointer Events に統一
+ *  D. 入力は Pointer Events に統一（ハンドル操作中のみスクロール抑止）
+ *  E. 画像は全てブラウザ内で処理（外部送信なし）
  * ============================================================ */
 
 // ---- DOM 参照 ----
@@ -64,7 +65,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = 'v1.31 (2026-06-16)';
+const BUILD = 'v1.41 (2026-06-16)';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -180,8 +181,8 @@ async function loadImageFile(file) {
   setStatus('info',
     `読み込み完了（${state.nativeW}×${state.nativeH}px）— 4 点を角に合わせて「補正実行」`);
 
-  // 重要: OpenCV(約10MB) を自動で読み込むとモバイルが固まるため、
-  // 自動検出は「✨自動で枠検出」ボタンを押したときだけ実行する。
+  // 自動検出は「✨自動で枠検出」ボタンを押したときだけ実行する
+  // （読込直後の手動調整を邪魔しないため）。
 }
 
 // 元画像を「ビュー」サイズに縮小し、周囲に余白を付けて表示キャンバスへ描画
@@ -521,6 +522,8 @@ function hideLoupe() { loupe.hidden = true; }
 // ---- イベント ----
 fileInput.addEventListener('change', (e) => {
   const file = e.target.files && e.target.files[0];
+  // 同じファイルを選び直しても change が発火するよう毎回リセット
+  e.target.value = '';
   if (!file) return;
   loadImageFile(file).catch((err) => {
     console.error(err);
@@ -1002,7 +1005,7 @@ function renderResult() {
 
 warpBtn.addEventListener('click', () => { runWarp(); });
 
-// 自動検出は明示的なタップ時のみ（OpenCV を読むのはこの時だけ）
+// 自動検出は明示的なタップ時のみ実行
 if (autoBtn) {
   autoBtn.addEventListener('click', () => {
     if (!state.bitmap) return;
@@ -1012,9 +1015,9 @@ if (autoBtn) {
 }
 
 /* ============================================================
- * 自動輪郭検出（2 / 5）
- *  - OpenCV ロード完了後に、縮小コピー上で検出（モバイル負荷対策）
- *  - 最大の四角形を検出し、元座標→表示座標へ戻して滑らかに移動
+ * 自動輪郭検出（純 JS）
+ *  - 縮小コピー上で大津の二値化 → 最大の明領域（紙）の四隅を推定
+ *  - 元座標→表示座標へ戻して滑らかに移動
  *  - ユーザーが既に頂点を触っていれば尊重して上書きしない
  * ============================================================ */
 
@@ -1206,13 +1209,18 @@ function tsName(ext) {
 
 function downloadResult(mime, ext, quality) {
   if (!state.warpedCanvas) return;
-  const url = dstCanvas.toDataURL(mime, quality);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = tsName(ext);
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  // toBlob + ObjectURL（toDataURL は高解像度で巨大文字列になりメモリを食うため）
+  dstCanvas.toBlob((blob) => {
+    if (!blob) { setStatus('error', '保存用データの生成に失敗しました'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = tsName(ext);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }, mime, quality);
 }
 
 downloadPngBtn.addEventListener('click', () => downloadResult('image/png', 'png'));

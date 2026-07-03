@@ -139,49 +139,7 @@ body {
 
 
 /* ═══════════════════════════════════════════════════════
-   5. ツールバー → 透明化してファイルボタンをドロップゾーン風に
-   ═══════════════════════════════════════════════════════ */
-.toolbar.card {
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  padding: 0 0 16px;
-}
-
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-}
-
-/* ファイル選択ボタン → 全幅のドロップゾーン
-   .btn-primary の後に定義されるが !important で確実に上書き */
-.file-btn {
-  width: 100%;
-  padding: 18px 24px;
-  background: var(--surface) !important;
-  border: 1.5px dashed var(--border-2) !important;
-  border-radius: var(--r) !important;
-  color: var(--muted) !important;
-  box-shadow: none !important;
-  font-size: 0.92rem;
-  font-weight: 500;
-  justify-content: center;
-  letter-spacing: 0.1px;
-  transition: border-color var(--tr), background var(--tr), color var(--tr);
-}
-
-.file-btn:hover:not(:disabled) {
-  border-color: var(--blue) !important;
-  background: var(--blue-l) !important;
-  color: var(--blue) !important;
-  box-shadow: none !important;
-}
-
-
-/* ═══════════════════════════════════════════════════════
-   6. ボタン
+   5. ボタン
    ═══════════════════════════════════════════════════════ */
 .btn {
   display: inline-flex;
@@ -593,10 +551,6 @@ body {
 }
 
 .save-hint b { color: var(--text-2); }
-
-/* 互換 */
-.filter-group, .download-group { display: flex; align-items: center; gap: 8px; }
-.filter-label { font-size: 0.86rem; color: var(--muted); font-weight: 600; }
 
 
 /* ═══════════════════════════════════════════════════════
