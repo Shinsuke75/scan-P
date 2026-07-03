@@ -65,7 +65,7 @@ const overlayCtx = overlayCanvas.getContext('2d');
 const dstCtx = dstCanvas.getContext('2d');
 
 // ビルド表示（キャッシュ確認用）。変更のたびに更新する。
-const BUILD = 'v1.41 (2026-06-16)';
+const BUILD = 'v1.42 (2026-06-16)';
 const buildStampEl = document.getElementById('buildStamp');
 if (buildStampEl) buildStampEl.textContent = 'build ' + BUILD;
 
@@ -549,7 +549,7 @@ window.addEventListener('resize', () => {
 });
 
 /* ============================================================
- * 補正実行（4: 座標変換・並べ替え・出力サイズ算出・clamp・warp）
+ * 補正実行（座標変換 → 四隅の並べ替え → 出力サイズ算出 → warp）
  * ============================================================ */
 
 // 表示座標（余白込み）の頂点を元画像座標へ変換
